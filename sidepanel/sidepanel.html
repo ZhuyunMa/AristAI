@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AristAI</title>
+  <link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+  <div class="container">
+    <header class="hero">
+      <div class="hero-copy">
+        <div class="title-row">
+          <h1>AristAI</h1>
+          <img src="../icons/icon128.png" alt="AristAI icon" class="hero-icon" />
+        </div>
+      <p class="subtitle">YouTube → NotebookLM workflow</p>
+      </div>
+      <button id="refreshBtn" class="icon-button" type="button" aria-label="Refresh queue" title="Refresh">&#8635;</button>
+    </header>
+
+    <section class="actions">
+      <button id="jumpToQueueBtn">Jump to Queue</button>
+      <button id="copyBtn">Copy All URLs</button>
+      <button id="clearBtn" class="danger">Clear Queue</button>
+    </section>
+
+    <section class="details-section">
+      <h2>Selected Video</h2>
+      <div id="detailsEmptyState" class="empty">Select a video from the queue to view details.</div>
+
+      <div id="detailsPanel" class="details-panel" style="display: none;">
+        <img
+          id="detailsThumbnail"
+          src=""
+          alt="Selected video thumbnail"
+          style="width: 100%; border-radius: 12px; margin-bottom: 12px;"
+        />
+
+        <div class="detail-block">
+          <div><strong>Title:</strong></div>
+          <div id="detailsTitle"></div>
+        </div>
+
+        <div class="detail-block" style="margin-top: 10px;">
+          <div><strong>Channel:</strong></div>
+          <div id="detailsChannel"></div>
+        </div>
+
+        <div class="detail-block" style="margin-top: 10px;">
+          <div><strong>URL:</strong></div>
+          <a id="detailsUrl" href="#" target="_blank" rel="noopener noreferrer"></a>
+        </div>
+
+        <div class="detail-block" style="margin-top: 14px;">
+          <div><strong>Description</strong></div>
+          <div id="descriptionMeta" class="section-meta">No description captured yet.</div>
+          <div
+            id="descriptionBox"
+            style="margin-top: 8px; padding: 10px; border: 1px solid #ddd; border-radius: 10px; min-height: 72px; white-space: pre-wrap;"
+          >
+            No description yet.
+          </div>
+        </div>
+
+        <div class="detail-block" style="margin-top: 14px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+            <strong>Summary</strong>
+            <button id="summarizeBtn" type="button">Summarize</button>
+          </div>
+          <div id="summaryMeta" class="section-meta">No summary generated yet.</div>
+          <div
+            id="summaryBox"
+            style="margin-top: 8px; padding: 10px; border: 1px solid #ddd; border-radius: 10px; min-height: 72px; white-space: pre-wrap;"
+          >
+            No summary yet.
+          </div>
+        </div>
+
+        <div class="detail-block" style="margin-top: 14px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <strong>NotebookLM Export</strong>
+            <button id="sendToNotebookBtn" type="button">Send to NotebookLM</button>
+          </div>
+          <div class="section-meta">If no summary exists yet, AristAI will generate one automatically before export.</div>
+          <div
+            id="notebookExportStatus"
+            style="margin-top: 8px; padding: 10px; border: 1px solid #ddd; border-radius: 10px; min-height: 48px; white-space: pre-wrap;"
+          >
+            No export prepared yet.
+          </div>
+        </div>
+
+        <div class="detail-block" style="margin-top: 14px;">
+          <strong>Ask AI</strong>
+          <div id="askAiHint" class="section-meta">AI provider not loaded yet.</div>
+          <textarea
+            id="askAiInput"
+            placeholder="Ask something about this video..."
+            rows="3"
+            style="width: 100%; margin-top: 8px; padding: 10px; border-radius: 10px; border: 1px solid #ccc; resize: vertical; box-sizing: border-box;"
+          ></textarea>
+          <button id="askAiBtn" type="button" style="margin-top: 8px;">Ask AI</button>
+
+          <div
+            id="askAiResponse"
+            style="margin-top: 8px; padding: 10px; border: 1px solid #ddd; border-radius: 10px; min-height: 56px; white-space: pre-wrap;"
+          >
+            No response yet.
+          </div>
+          <div id="askAiSources" class="section-meta">Sources used: none yet.</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="queueSection">
+      <h2>Queue</h2>
+      <div id="emptyState" class="empty">No videos added yet.</div>
+      <div id="queueList" class="queue-list"></div>
+    </section>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
