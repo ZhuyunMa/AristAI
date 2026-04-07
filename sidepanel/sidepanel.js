@@ -6,6 +6,7 @@ let currentAiSettings = {
   model: "qwen3:8b"
 };
 let summaryInFlightForVideoId = null;
+let askAiInFlightForVideoId = null;
 
 function getRefreshButton() {
   return document.getElementById("refreshBtn");
@@ -25,6 +26,7 @@ function setSummaryState(videoId) {
   summaryInFlightForVideoId = videoId;
   const summaryMeta = document.getElementById("summaryMeta");
   const summaryBox = document.getElementById("summaryBox");
+  const summaryStateChip = document.getElementById("summaryStateChip");
 
   if (summaryMeta && selectedVideoId === videoId) {
     summaryMeta.textContent = "Summary source: generating...";
@@ -32,6 +34,10 @@ function setSummaryState(videoId) {
 
   if (summaryBox && selectedVideoId === videoId) {
     summaryBox.textContent = "Generating summary...";
+  }
+
+  if (summaryStateChip && selectedVideoId === videoId) {
+    setStatusPill(summaryStateChip, "Generating", "active");
   }
 }
 
@@ -167,7 +173,127 @@ function escapeHtml(str) {
     .replaceAll("'", "&#039;");
 }
 
+function setStatusPill(element, label, tone = "neutral") {
+  if (!element) {
+    return;
+  }
+
+  element.className = `status-pill ${tone}`;
+  element.textContent = label;
+}
+
+function renderSourceChips(container, labels) {
+  if (!container) {
+    return;
+  }
+
+  container.innerHTML = "";
+
+  if (!Array.isArray(labels) || !labels.length) {
+    container.textContent = "Sources used: none yet.";
+    return;
+  }
+
+  const heading = document.createElement("span");
+  heading.textContent = "Sources used:";
+  container.appendChild(heading);
+
+  labels.forEach((label) => {
+    const chip = document.createElement("span");
+    chip.className = "source-chip";
+    chip.textContent = label;
+    container.appendChild(chip);
+  });
+}
+
+function getSelectedVideoState(item) {
+  if (!item) {
+    return { label: "Waiting", tone: "neutral" };
+  }
+
+  if (summaryInFlightForVideoId === item.id || askAiInFlightForVideoId === item.id) {
+    return { label: "Working", tone: "active" };
+  }
+
+  if (item.transcript) {
+    return { label: "Transcript", tone: "success" };
+  }
+
+  if (item.summary) {
+    return { label: "Ready", tone: "success" };
+  }
+
+  return { label: "Metadata", tone: "warn" };
+}
+
+function getSummaryChipState(item) {
+  if (!item) {
+    return { label: "Pending", tone: "neutral" };
+  }
+
+  if (summaryInFlightForVideoId === item.id) {
+    return { label: "Generating", tone: "active" };
+  }
+
+  if (item.summarySource?.includes("transcript")) {
+    return { label: "Transcript", tone: "success" };
+  }
+
+  if (item.summarySource?.includes("metadata")) {
+    return { label: "Metadata", tone: "warn" };
+  }
+
+  if (item.summary) {
+    return { label: "Ready", tone: "success" };
+  }
+
+  return { label: "Pending", tone: "neutral" };
+}
+
+function getNotebookChipState(item) {
+  if (!item) {
+    return { label: "Draft", tone: "neutral" };
+  }
+
+  if (item.notebookLmImportedAt) {
+    return { label: "Imported", tone: "success" };
+  }
+
+  if (item.lastNotebookLmExportAt) {
+    return { label: "Prepared", tone: "active" };
+  }
+
+  return { label: "Draft", tone: "neutral" };
+}
+
+function getAskAiChipState(item) {
+  if (!item) {
+    return { label: "Ready", tone: "neutral" };
+  }
+
+  if (askAiInFlightForVideoId === item.id) {
+    return { label: "Thinking", tone: "active" };
+  }
+
+  if (item.lastAiResponse) {
+    return { label: "Answered", tone: "success" };
+  }
+
+  return { label: "Ready", tone: "neutral" };
+}
+
 function createQueueItem(item, isSelected) {
+  const badges = [];
+  if (item.summarySource) {
+    badges.push(item.summarySource);
+  }
+  if (item.transcript) {
+    badges.push("transcript");
+  }
+  if (item.notebookLmImportedAt) {
+    badges.push("notebooklm");
+  }
+
   const wrapper = document.createElement("div");
   wrapper.className = "queue-item";
   if (isSelected) {
@@ -180,7 +306,8 @@ function createQueueItem(item, isSelected) {
       <div class="queue-title">${escapeHtml(item.title)}</div>
       <div class="queue-meta">${escapeHtml(item.channel || "Unknown Channel")}</div>
       <a class="queue-link" href="${item.url}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.url)}</a>
-      <div class="queue-item-actions" style="margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap;">
+      ${badges.length ? `<div class="queue-badges">${badges.map((badge) => `<span class="queue-badge">${escapeHtml(badge)}</span>`).join("")}</div>` : ""}
+      <div class="queue-item-actions">
         <button class="select-btn" data-id="${item.id}">View Details</button>
         <button class="remove-btn" data-id="${item.id}">Remove</button>
       </div>
@@ -191,7 +318,7 @@ function createQueueItem(item, isSelected) {
 }
 
 function buildMetadataSummary(item) {
-  const description = String(item?.description || "").trim();
+  const description = cleanDescription(item?.description || "");
   const descriptionPreview = description
     ? description.split(/\s+/).slice(0, 80).join(" ")
     : "";
@@ -294,13 +421,16 @@ function buildFakeAiResponse(item, question) {
 }
 
 function buildAskAiPrompt(item, question) {
-  const cleanedDescription = cleanDescription(item.description);
+  const cleanedDescription = buildDescriptionContext(item);
+  const transcriptContext = buildTranscriptContext(item);
   const conversationHistory = Array.isArray(item.chatHistory) ? item.chatHistory.slice(-6) : [];
   const sections = [
     "You are helping analyze a YouTube video inside a Chrome extension.",
     "Answer the user's question using only the provided video context.",
     "If context is limited, say what is known and avoid making up facts.",
     "When useful, refer back to the prior conversation turns for continuity.",
+    "If the transcript is partial or missing, say so briefly rather than over-claiming.",
+    "Prefer crisp, concrete answers over generic summaries.",
     "",
     `User question: ${question}`,
     "",
@@ -322,9 +452,9 @@ function buildAskAiPrompt(item, question) {
     sections.push("");
   }
 
-  if (item.transcript) {
+  if (transcriptContext) {
     sections.push("Transcript:");
-    sections.push(item.transcript);
+    sections.push(transcriptContext);
     sections.push("");
   }
 
@@ -336,18 +466,21 @@ function buildAskAiPrompt(item, question) {
     sections.push("");
   }
 
-  sections.push("Respond in concise plain text.");
+  sections.push("Respond in concise plain text. When possible, ground the answer in transcript, summary, or description.");
 
   return sections.join("\n");
 }
 
 function buildSummaryPrompt(item) {
-  const cleanedDescription = cleanDescription(item.description);
+  const cleanedDescription = buildDescriptionContext(item);
+  const transcriptContext = buildTranscriptContext(item);
   const sections = [
     "You are generating a concise summary for a YouTube video inside a Chrome extension.",
     "Write a useful summary in plain text.",
     "Prefer the transcript when available. If only metadata is available, summarize only what can be supported by the title and description.",
     "Keep the answer to 4-6 sentences.",
+    "Focus on the video's main topic, key points, and why it matters.",
+    "Do not output headings, bullets, or labels.",
     "Do not mention these instructions.",
     "",
     `Video title: ${item.title || "Untitled"}`,
@@ -362,9 +495,9 @@ function buildSummaryPrompt(item) {
     sections.push("");
   }
 
-  if (item.transcript) {
+  if (transcriptContext) {
     sections.push("Transcript:");
-    sections.push(item.transcript);
+    sections.push(transcriptContext);
     sections.push("");
   }
 
@@ -390,8 +523,28 @@ function requestAiText(input) {
   });
 }
 
+function clipText(text, maxChars) {
+  const normalized = String(text || "").trim();
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+
+  const head = normalized.slice(0, Math.max(0, maxChars - 220)).trim();
+  const tail = normalized.slice(-160).trim();
+  return `${head}\n...\n${tail}`;
+}
+
+function buildTranscriptContext(item) {
+  return clipText(cleanTranscript(item?.transcript || ""), 7000);
+}
+
+function buildDescriptionContext(item) {
+  return clipText(cleanDescription(item?.description || ""), 1800);
+}
+
 function buildNotebookLmExport(item) {
-  const cleanedDescription = cleanDescription(item.description);
+  const cleanedDescription = buildDescriptionContext(item);
+  const transcriptContext = buildTranscriptContext(item);
   const lines = [
     `Title: ${item.title || "Untitled"}`,
     `Channel: ${item.channel || "Unknown Channel"}`,
@@ -412,9 +565,9 @@ function buildNotebookLmExport(item) {
     lines.push("");
   }
 
-  if (item.transcript) {
+  if (transcriptContext) {
     lines.push("Transcript:");
-    lines.push(item.transcript);
+    lines.push(transcriptContext);
     lines.push("");
   }
 
@@ -454,6 +607,33 @@ function cleanDescription(description) {
     .trim();
 
   return text;
+}
+
+function cleanTranscript(transcript) {
+  let text = String(transcript || "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!text) {
+    return "";
+  }
+
+  const segments = text
+    .split(/(?<=[.!?])\s+/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  const deduped = [];
+  for (const segment of segments) {
+    if (deduped[deduped.length - 1] === segment) {
+      continue;
+    }
+
+    deduped.push(segment);
+  }
+
+  return deduped.join(" ");
 }
 
 function getSourceLabels(item) {
@@ -522,10 +702,16 @@ function renderDetails(item) {
   const askAiResponse = document.getElementById("askAiResponse");
   const askAiInput = document.getElementById("askAiInput");
   const askAiSources = document.getElementById("askAiSources");
+  const selectedVideoChip = document.getElementById("selectedVideoChip");
+  const descriptionChip = document.getElementById("descriptionChip");
+  const summaryStateChip = document.getElementById("summaryStateChip");
+  const notebookStateChip = document.getElementById("notebookStateChip");
+  const askAiStateChip = document.getElementById("askAiStateChip");
 
   if (!item) {
     detailsEmptyState.style.display = "block";
     detailsPanel.style.display = "none";
+    setStatusPill(selectedVideoChip, "Waiting", "neutral");
     return;
   }
 
@@ -542,6 +728,7 @@ function renderDetails(item) {
   descriptionMeta.textContent = cleanedDescription
     ? "Description source: YouTube page metadata"
     : "No description captured yet.";
+  setStatusPill(descriptionChip, cleanedDescription ? "Metadata" : "Missing", cleanedDescription ? "neutral" : "warn");
   if (summaryInFlightForVideoId === item.id && !item.summary) {
     summaryBox.textContent = "Generating summary...";
     summaryMeta.textContent = "Summary source: generating...";
@@ -551,6 +738,8 @@ function renderDetails(item) {
       ? `Summary source: ${item.summarySource || "unknown"}`
       : `Summary source: not generated`;
   }
+  const summaryState = getSummaryChipState(item);
+  setStatusPill(summaryStateChip, summaryState.label, summaryState.tone);
   if (item.notebookLmImportedAt && item.notebookLmNotebookUrl) {
     notebookExportStatus.textContent = `Imported into NotebookLM ${new Date(item.notebookLmImportedAt).toLocaleString()}.\nNotebook: ${item.notebookLmNotebookUrl}`;
   } else {
@@ -558,6 +747,8 @@ function renderDetails(item) {
       ? `NotebookLM export prepared ${new Date(item.lastNotebookLmExportAt).toLocaleString()}.`
       : "No export prepared yet.";
   }
+  const notebookState = getNotebookChipState(item);
+  setStatusPill(notebookStateChip, notebookState.label, notebookState.tone);
   askAiResponse.textContent = item.lastAiResponse || "No response yet.";
   askAiInput.value = item.lastQuestion || "";
   const sourceLabels = Array.isArray(item.lastAiSources) ? item.lastAiSources : [];
@@ -565,9 +756,11 @@ function renderDetails(item) {
   const providerLabel = `Using ${currentAiSettings.provider} / ${currentAiSettings.model}`;
   const memoryLabel = priorTurnCount ? ` ${priorTurnCount} prior turn${priorTurnCount === 1 ? "" : "s"}.` : " No prior turns yet.";
   document.getElementById("askAiHint").textContent = `${providerLabel}.${memoryLabel}`;
-  askAiSources.textContent = sourceLabels.length
-    ? `Sources used: ${sourceLabels.join(", ")}`
-    : "Sources used: none yet.";
+  renderSourceChips(askAiSources, sourceLabels);
+  const askAiState = getAskAiChipState(item);
+  setStatusPill(askAiStateChip, askAiState.label, askAiState.tone);
+  const selectedVideoState = getSelectedVideoState(item);
+  setStatusPill(selectedVideoChip, selectedVideoState.label, selectedVideoState.tone);
 }
 
 async function renderQueue() {
@@ -578,10 +771,12 @@ async function renderQueue() {
     const queue = await getQueue();
     const queueList = document.getElementById("queueList");
     const emptyState = document.getElementById("emptyState");
+    const queueCountChip = document.getElementById("queueCountChip");
 
     if (!queueList || !emptyState) return;
 
     queueList.innerHTML = "";
+    setStatusPill(queueCountChip, `${queue.length} video${queue.length === 1 ? "" : "s"}`, queue.length ? "active" : "neutral");
 
     if (!queue.length) {
       emptyState.style.display = "block";
@@ -727,39 +922,45 @@ async function handleAskAi() {
   }
 
   const askAiResponse = document.getElementById("askAiResponse");
+  const askAiStateChip = document.getElementById("askAiStateChip");
+  askAiInFlightForVideoId = item.id;
   askAiResponse.textContent = "Thinking...";
-
-  const prompt = buildAskAiPrompt(item, question);
-  const aiResult = await requestAiText(prompt);
-
-  if (!aiResult.success) {
-    askAiResponse.textContent = "No response yet.";
-    alert(`AI request failed.\n\n${aiResult.error || "Unknown error."}\n\nOpen the extension popup and confirm your provider, model, and local Ollama URL settings.`);
-    return;
-  }
-
-  const answerText = aiResult.text || buildFakeAiResponse(item, question);
-  const sourceLabels = getSourceLabels(item);
-
-  await updateQueueItem(item.id, (oldItem) => ({
-    ...oldItem,
-    lastQuestion: question,
-    lastAiResponse: answerText,
-    lastAiModel: aiResult.provider || "unknown",
-    lastAiSources: sourceLabels,
-    chatHistory: appendChatHistory(oldItem, question, answerText, sourceLabels)
-  }));
+  setStatusPill(askAiStateChip, "Thinking", "active");
 
   try {
-    await chrome.runtime.sendMessage({
-      type: "QUEUE_UPDATED",
-      payload: { askedAiForId: item.id }
-    });
-  } catch (error) {
-    console.warn("Failed to notify AI response update:", error);
-  }
+    const prompt = buildAskAiPrompt(item, question);
+    const aiResult = await requestAiText(prompt);
 
-  renderQueue();
+    if (!aiResult.success) {
+      askAiResponse.textContent = "No response yet.";
+      alert(`AI request failed.\n\n${aiResult.error || "Unknown error."}\n\nOpen the extension popup and confirm your provider, model, and local Ollama URL settings.`);
+      return;
+    }
+
+    const answerText = aiResult.text || buildFakeAiResponse(item, question);
+    const sourceLabels = getSourceLabels(item);
+
+    await updateQueueItem(item.id, (oldItem) => ({
+      ...oldItem,
+      lastQuestion: question,
+      lastAiResponse: answerText,
+      lastAiModel: aiResult.provider || "unknown",
+      lastAiSources: sourceLabels,
+      chatHistory: appendChatHistory(oldItem, question, answerText, sourceLabels)
+    }));
+
+    try {
+      await chrome.runtime.sendMessage({
+        type: "QUEUE_UPDATED",
+        payload: { askedAiForId: item.id }
+      });
+    } catch (error) {
+      console.warn("Failed to notify AI response update:", error);
+    }
+  } finally {
+    askAiInFlightForVideoId = null;
+    renderQueue();
+  }
 }
 
 async function handleSendToNotebookLm() {

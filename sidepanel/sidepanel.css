@@ -91,6 +91,10 @@ body {
   margin: 16px 0 18px;
 }
 
+.actions button:last-child {
+  grid-column: span 2;
+}
+
 button {
   border: none;
   background: var(--brand);
@@ -126,6 +130,18 @@ h2 {
   letter-spacing: -0.02em;
 }
 
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.section-heading h2 {
+  margin-bottom: 0;
+}
+
 .empty {
   color: var(--muted);
   font-size: 14px;
@@ -144,6 +160,8 @@ h2 {
   width: 100%;
   border-radius: 16px;
   box-shadow: var(--shadow);
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
 }
 
 .meta-card,
@@ -158,6 +176,37 @@ h2 {
 .meta-card {
   border-radius: 18px;
   padding: 16px;
+}
+
+.meta-row {
+  display: grid;
+  gap: 4px;
+}
+
+.meta-row + .meta-row {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.meta-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.meta-value {
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.meta-link {
+  font-size: 13px;
+  color: #0c5bd8;
+  text-decoration: none;
+  word-break: break-all;
 }
 
 .detail-block {
@@ -181,10 +230,62 @@ h2 {
   flex-wrap: wrap;
 }
 
+.section-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .section-meta {
   margin-top: 8px;
   font-size: 12px;
   color: var(--muted);
+  line-height: 1.5;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.status-pill.neutral {
+  background: rgba(23, 23, 23, 0.07);
+  color: #3f3a34;
+}
+
+.status-pill.active {
+  background: rgba(12, 91, 216, 0.12);
+  border-color: rgba(12, 91, 216, 0.18);
+  color: #0c5bd8;
+}
+
+.status-pill.success {
+  background: rgba(48, 128, 86, 0.12);
+  border-color: rgba(48, 128, 86, 0.18);
+  color: #256b46;
+}
+
+.status-pill.warn {
+  background: rgba(182, 84, 42, 0.12);
+  border-color: rgba(182, 84, 42, 0.18);
+  color: var(--accent);
+}
+
+.status-pill.error {
+  background: rgba(170, 46, 31, 0.1);
+  border-color: rgba(170, 46, 31, 0.16);
+  color: var(--danger);
 }
 
 .content-box {
@@ -200,6 +301,11 @@ h2 {
 
 .compact-box {
   min-height: 56px;
+}
+
+.chat-response {
+  background:
+    linear-gradient(180deg, rgba(255, 248, 239, 0.85) 0%, rgba(255, 255, 255, 0.95) 100%);
 }
 
 .input-box {
@@ -221,6 +327,24 @@ h2 {
 
 .action-spaced {
   margin-top: 10px;
+}
+
+.source-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.source-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(23, 23, 23, 0.06);
+  border: 1px solid rgba(33, 26, 18, 0.1);
+  color: #4a433c;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .queue-list {
@@ -268,6 +392,25 @@ h2 {
   margin-bottom: 8px;
 }
 
+.queue-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 0;
+}
+
+.queue-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(23, 23, 23, 0.06);
+  border: 1px solid rgba(33, 26, 18, 0.09);
+  color: #4f473e;
+  font-size: 11px;
+  font-weight: 600;
+}
+
 .queue-link,
 #detailsUrl {
   font-size: 12px;
@@ -278,6 +421,9 @@ h2 {
 
 .queue-item-actions {
   margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .remove-btn {
@@ -306,6 +452,10 @@ h2 {
 @media (max-width: 520px) {
   .actions {
     grid-template-columns: 1fr;
+  }
+
+  .actions button:last-child {
+    grid-column: span 1;
   }
 
   .queue-item {

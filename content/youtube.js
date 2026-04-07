@@ -223,6 +223,155 @@
     return "";
   }
 
+  function normalizeTranscriptChunks(chunks) {
+    const seen = new Set();
+    const ordered = [];
+
+    for (const chunk of chunks) {
+      const normalized = normalizeWhitespace(decodeHtmlEntities(chunk));
+      if (!normalized || seen.has(normalized)) {
+        continue;
+      }
+
+      seen.add(normalized);
+      ordered.push(normalized);
+    }
+
+    return ordered.join(" ");
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+  }
+
+  async function getTranscriptFromVideoTextTracks() {
+    const video = document.querySelector("video");
+    if (!video?.textTracks?.length) {
+      return "";
+    }
+
+    const preferredLanguages = ["en", "en-US", "en-GB", "zh", "zh-CN", "zh-Hans", "zh-TW"];
+    const textTracks = Array.from(video.textTracks || []);
+    const candidateTracks = textTracks.filter((track) => {
+      const kind = String(track.kind || "").toLowerCase();
+      return kind === "captions" || kind === "subtitles";
+    });
+
+    const rankedTracks = candidateTracks.sort((a, b) => {
+      const aLang = String(a.language || "");
+      const bLang = String(b.language || "");
+      const aRank = preferredLanguages.findIndex((lang) => aLang === lang || aLang.startsWith(lang));
+      const bRank = preferredLanguages.findIndex((lang) => bLang === lang || bLang.startsWith(lang));
+      return (aRank === -1 ? 999 : aRank) - (bRank === -1 ? 999 : bRank);
+    });
+
+    for (const track of rankedTracks) {
+      let originalMode = track.mode;
+      try {
+        if (track.mode === "disabled") {
+          track.mode = "hidden";
+        }
+
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+          const cues = Array.from(track.cues || []);
+          const transcript = normalizeTranscriptChunks(cues.map((cue) => cue.text || ""));
+          if (transcript) {
+            return transcript;
+          }
+
+          await sleep(250);
+        }
+      } catch (error) {
+        console.warn("Failed to read video text tracks:", error);
+      } finally {
+        try {
+          track.mode = originalMode;
+        } catch (_error) {
+          // ignore mode reset failures
+        }
+      }
+    }
+
+    return "";
+  }
+
+  function getInteractiveElements() {
+    return Array.from(document.querySelectorAll("button, [role='button'], tp-yt-paper-button, yt-button-view-model button"))
+      .filter((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      });
+  }
+
+  function findClickableByPatterns(patterns) {
+    const regexes = patterns.map((pattern) => pattern instanceof RegExp ? pattern : new RegExp(pattern, "i"));
+    return getInteractiveElements().find((element) => {
+      const text = normalizeWhitespace(
+        element.getAttribute("aria-label") ||
+        element.getAttribute("title") ||
+        element.textContent
+      ).toLowerCase();
+
+      return regexes.some((regex) => regex.test(text));
+    }) || null;
+  }
+
+  function extractTranscriptFromPanel() {
+    const panel = document.querySelector('ytd-engagement-panel-section-list-renderer[target-id*="transcript"]');
+    if (!panel) {
+      return "";
+    }
+
+    const segmentNodes = Array.from(
+      panel.querySelectorAll(
+        "ytd-transcript-segment-renderer #segment-text, ytd-transcript-segment-renderer .segment-text, ytd-transcript-segment-renderer yt-formatted-string"
+      )
+    );
+
+    if (!segmentNodes.length) {
+      return "";
+    }
+
+    const transcript = normalizeTranscriptChunks(
+      segmentNodes.map((node) => node.textContent || "").filter((text) => {
+        const normalized = normalizeWhitespace(text);
+        return normalized && !/^\d{1,2}:\d{2}$/.test(normalized);
+      })
+    );
+
+    return transcript;
+  }
+
+  async function fetchTranscriptFromTranscriptPanel() {
+    let transcript = extractTranscriptFromPanel();
+    if (transcript) {
+      return transcript;
+    }
+
+    const transcriptButton = findClickableByPatterns([
+      /show transcript/i,
+      /open transcript/i,
+      /^transcript$/i
+    ]);
+
+    if (!transcriptButton) {
+      return "";
+    }
+
+    transcriptButton.click();
+
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      await sleep(250);
+      transcript = extractTranscriptFromPanel();
+      if (transcript) {
+        return transcript;
+      }
+    }
+
+    return "";
+  }
+
   function chooseTranscriptTrack(tracks) {
     if (!Array.isArray(tracks) || !tracks.length) {
       return null;
@@ -292,6 +441,42 @@
     return normalizeWhitespace(decodeHtmlEntities(transcript));
   }
 
+  async function fetchTranscriptWithFallbackFormats(track) {
+    const attempts = [
+      () => fetchTranscriptJson(track),
+      async () => {
+        const url = new URL(track.baseUrl);
+        url.searchParams.set("fmt", "srv3");
+        const response = await fetch(url.toString(), { credentials: "include" });
+        if (!response.ok) {
+          throw new Error(`Transcript srv3 request failed with status ${response.status}`);
+        }
+
+        const xmlText = await response.text();
+        const xml = new DOMParser().parseFromString(xmlText, "application/xml");
+        const transcript = Array.from(xml.getElementsByTagName("text"))
+          .map((node) => node.textContent || "")
+          .join(" ");
+
+        return normalizeWhitespace(decodeHtmlEntities(transcript));
+      },
+      () => fetchTranscriptXml(track)
+    ];
+
+    for (const attempt of attempts) {
+      try {
+        const transcript = await attempt();
+        if (transcript) {
+          return transcript;
+        }
+      } catch (_error) {
+        // try the next format
+      }
+    }
+
+    return "";
+  }
+
   async function fetchTranscriptForVideo(video) {
     try {
       let tracks = await getCaptionTracksFromPageBridge();
@@ -320,6 +505,20 @@
       const selectedTrack = chooseTranscriptTrack(tracks);
 
       if (!selectedTrack?.baseUrl) {
+        let textTrackTranscript = await getTranscriptFromVideoTextTracks();
+        if (!textTrackTranscript) {
+          textTrackTranscript = await fetchTranscriptFromTranscriptPanel();
+        }
+        if (textTrackTranscript) {
+          return {
+            transcript: textTrackTranscript,
+            transcriptStatus: "ready",
+            transcriptLanguage: "",
+            transcriptLabel: "video-text-track",
+            transcriptFetchedAt: new Date().toISOString()
+          };
+        }
+
         return {
           transcript: "",
           transcriptStatus: "unavailable",
@@ -327,12 +526,14 @@
         };
       }
 
-      let transcript = "";
+      let transcript = await fetchTranscriptWithFallbackFormats(selectedTrack);
 
-      try {
-        transcript = await fetchTranscriptJson(selectedTrack);
-      } catch (_jsonError) {
-        transcript = await fetchTranscriptXml(selectedTrack);
+      if (!transcript) {
+        transcript = await getTranscriptFromVideoTextTracks();
+      }
+
+      if (!transcript) {
+        transcript = await fetchTranscriptFromTranscriptPanel();
       }
 
       if (!transcript) {

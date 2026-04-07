@@ -20,6 +20,8 @@ It is not a production-ready release, but the core workflow is implemented and c
 5. Export and auto-import a NotebookLM-ready source
 6. Open NotebookLM with the prepared draft and import status visible in-page
 
+In practical terms, the project is complete enough for a class demo or submission, while still leaving transcript stability and more formal backend transcription as future work.
+
 ## Implemented Features
 
 - Detect the current YouTube video from a watch page
@@ -28,8 +30,9 @@ It is not a production-ready release, but the core workflow is implemented and c
 - Save selected videos into a local queue with metadata
 - Manage the queue inside a Chrome side panel
 - Display selected video details including title, channel, URL, description, and summary
-- Generate a summary from transcript when available
-- Fall back to metadata + local AI summary generation when transcript is unavailable
+- Attempt transcript retrieval from YouTube page data, text tracks, and transcript-panel fallbacks
+- Generate a summary from transcript when transcript extraction succeeds
+- Fall back to metadata + local AI summary generation when transcript extraction is unavailable or incomplete
 - Ask questions about the selected video using a local Ollama model
 - Keep per-video multi-turn chat history in the AI sidebar
 - Show which sources were used for each AI answer
@@ -58,7 +61,7 @@ The YouTube content script:
 - detects video metadata
 - injects the action button
 - stores video data in `chrome.storage.local`
-- attempts transcript retrieval when possible
+- attempts transcript retrieval when possible, with multiple fallbacks
 
 ### Side Panel
 
@@ -106,7 +109,7 @@ Click `Send to NotebookLM` to:
 - copy it when possible
 - open NotebookLM
 - display the prepared draft inside the NotebookLM page
-- attempt to create a NotebookLM text source automatically
+- attempt to create a NotebookLM text source automatically through best-effort DOM automation
 - expose retry / status feedback inside the AristAI NotebookLM panel
 
 ## Local Setup
@@ -169,12 +172,14 @@ Recommended demo settings:
 
 ## Known Limitations
 
-- Transcript retrieval from YouTube is not fully reliable
-- When transcript retrieval fails, the system falls back to metadata + local AI summary generation
+- Transcript retrieval from YouTube is not fully reliable, even when subtitles are visibly shown in the player
+- Visible subtitles in the YouTube player do not always expose a full transcript source that a Chrome extension can read programmatically
+- When transcript retrieval fails, the system falls back to metadata + local AI summary generation instead of full transcript-based understanding
 - NotebookLM integration uses DOM automation rather than an official API, so automatic import is best-effort and may break if NotebookLM changes its UI
 - Source citations in the AI sidebar are heuristic source labels, not NotebookLM-native citations
-- The current UI is functional but still closer to an engineering prototype than a polished production interface
+- The current UI has been polished for demo use, but it is still not a full production interface
 - OpenAI provider support is not the primary demo path right now, although the architecture keeps the provider configurable
+- A more stable transcript pipeline would likely require backend ASR or local ASR instead of page-only extraction
 
 ## Project Structure
 
@@ -190,9 +195,9 @@ Recommended demo settings:
 
 ## Future Improvements
 
-- Improve transcript reliability
-- Clean noisy YouTube description text before summary/export
-- Add clearer loading / success / error states in the UI
+- Add a backend or local ASR fallback for reliable transcript generation
+- Improve transcript reliability for more YouTube subtitle variants
+- Continue cleaning noisy YouTube description text before summary/export
 - Improve NotebookLM import reliability across NotebookLM UI changes
 - Re-enable and harden OpenAI provider support for a cloud-backed version
 - Add stronger provider abstraction for switching between Ollama and OpenAI cleanly

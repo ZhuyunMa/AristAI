@@ -13,14 +13,15 @@
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = label;
-    button.style.padding = "8px 12px";
-    button.style.borderRadius = "10px";
-    button.style.border = "1px solid rgba(255,255,255,0.15)";
+    button.style.padding = "9px 13px";
+    button.style.borderRadius = "12px";
+    button.style.border = "1px solid rgba(255,255,255,0.14)";
     button.style.background = "#ffffff";
     button.style.color = "#111111";
     button.style.fontSize = "13px";
     button.style.fontWeight = "600";
     button.style.cursor = "pointer";
+    button.style.boxShadow = "0 6px 16px rgba(0,0,0,0.12)";
     return button;
   }
 
@@ -98,7 +99,7 @@
 
   function getStatusLabel(draft) {
     if (draft.status === "running") {
-      return "Auto-importing into NotebookLM...";
+      return `Auto-importing into NotebookLM...${draft.importAttemptCount ? ` Attempt ${draft.importAttemptCount}.` : ""}`;
     }
 
     if (draft.status === "completed") {
@@ -109,7 +110,35 @@
       return draft.error || "Auto import failed. You can retry or copy manually.";
     }
 
+    if (draft.importAttemptCount) {
+      return `NotebookLM auto import is queued for retry. Last error: ${draft.error || "unknown"}`;
+    }
+
     return "NotebookLM auto import is queued.";
+  }
+
+  function getStatusTone(draft) {
+    if (draft.status === "completed") {
+      return {
+        ink: "#def7c7",
+        bg: "rgba(124, 196, 101, 0.16)",
+        border: "rgba(124, 196, 101, 0.28)"
+      };
+    }
+
+    if (draft.status === "failed") {
+      return {
+        ink: "#ffcabd",
+        bg: "rgba(214, 88, 63, 0.16)",
+        border: "rgba(214, 88, 63, 0.24)"
+      };
+    }
+
+    return {
+      ink: "#cde4ff",
+      bg: "rgba(79, 131, 230, 0.16)",
+      border: "rgba(79, 131, 230, 0.24)"
+    };
   }
 
   function getInteractiveElements() {
@@ -142,6 +171,17 @@
       }
 
       await sleep(250);
+    }
+
+    return false;
+  }
+
+  async function clickFirstSuccessful(patternGroups, timeoutMs = 5000) {
+    for (const patterns of patternGroups) {
+      const clicked = await clickByPatterns(patterns, timeoutMs);
+      if (clicked) {
+        return true;
+      }
     }
 
     return false;
@@ -247,14 +287,27 @@
 
     await sleep(1200);
 
-    await clickByPatterns([/create new notebook/i, /^new notebook$/i], 3500);
-    await waitForNotebookUrlChange(startingUrl, 6000);
-    await clickByPatterns([/add source/i], 4000);
+    const openedNotebook = await clickByPatterns([/create new notebook/i, /^new notebook$/i], 3500);
+    if (openedNotebook) {
+      await waitForNotebookUrlChange(startingUrl, 6000);
+    }
 
-    const sourceTypeSelected = await clickByPatterns(
-      [/copied text/i, /paste text/i, /pasted text/i, /^text$/i],
-      6000
-    );
+    const openedSourceDialog = await clickFirstSuccessful([
+      [/add source/i],
+      [/sources/i, /add/i],
+      [/create your first source/i]
+    ], 4500);
+
+    if (!openedSourceDialog) {
+      throw new Error("Could not open the NotebookLM source dialog.");
+    }
+
+    const sourceTypeSelected = await clickFirstSuccessful([
+      [/copied text/i],
+      [/paste text/i],
+      [/pasted text/i],
+      [/^text$/i]
+    ], 6000);
 
     if (!sourceTypeSelected) {
       console.warn("NotebookLM text source option was not found; trying to fill any visible source form.");
@@ -265,7 +318,13 @@
       throw new Error("Could not find the NotebookLM text source input.");
     }
 
-    const submitted = await clickByPatterns([/insert/i, /add source/i, /save/i, /done/i, /create/i], 6000);
+    const submitted = await clickFirstSuccessful([
+      [/insert/i],
+      [/add source/i],
+      [/save/i],
+      [/done/i],
+      [/create/i]
+    ], 6000);
     if (!submitted) {
       throw new Error("Could not find the NotebookLM submit button for the source.");
     }
@@ -290,10 +349,12 @@
     autoImportInFlight = true;
 
     try {
+      const nextAttempt = Number(draft.importAttemptCount || 0) + 1;
       await patchDraft({
         status: "running",
         startedAt: new Date().toISOString(),
-        error: ""
+        error: "",
+        importAttemptCount: nextAttempt
       });
 
       await renderDraftPanel();
@@ -313,11 +374,23 @@
         notebookLmImportedAt: importedAt
       });
     } catch (error) {
+      const failedDraft = await getDraft();
+      const attemptCount = Number(failedDraft?.importAttemptCount || draft.importAttemptCount || 1);
+      const shouldRetry = attemptCount < 2;
+
       await patchDraft({
-        status: "failed",
-        autoImport: false,
+        status: shouldRetry ? "pending" : "failed",
+        autoImport: shouldRetry,
         error: String(error?.message || error)
       });
+
+      if (shouldRetry) {
+        await sleep(1200);
+        autoImportInFlight = false;
+        renderDraftPanel();
+        maybeAutoImportDraft();
+        return;
+      }
     } finally {
       autoImportInFlight = false;
       renderDraftPanel();
@@ -400,39 +473,53 @@
     panel.style.overflow = "auto";
     panel.style.zIndex = "2147483647";
     panel.style.padding = "14px";
-    panel.style.borderRadius = "16px";
-    panel.style.background = "#111111";
+    panel.style.borderRadius = "18px";
+    panel.style.background = "rgba(12, 12, 12, 0.97)";
+    panel.style.border = "1px solid rgba(255,255,255,0.08)";
     panel.style.color = "#ffffff";
-    panel.style.boxShadow = "0 12px 40px rgba(0,0,0,0.35)";
+    panel.style.boxShadow = "0 18px 50px rgba(0,0,0,0.38)";
+    panel.style.backdropFilter = "blur(16px)";
     panel.style.fontFamily = "Segoe UI, Arial, sans-serif";
 
     placePanel(panel);
 
+    const header = document.createElement("div");
+    header.style.display = "grid";
+    header.style.gap = "6px";
+
     const title = document.createElement("div");
     title.textContent = "AristAI Draft Ready";
-    title.style.fontSize = "18px";
+    title.style.fontSize = "17px";
     title.style.fontWeight = "700";
+    title.style.letterSpacing = "-0.02em";
 
     const subtitle = document.createElement("div");
     subtitle.textContent = draft.title || "Untitled";
-    subtitle.style.marginTop = "4px";
     subtitle.style.fontSize = "14px";
-    subtitle.style.opacity = "0.82";
+    subtitle.style.lineHeight = "1.45";
+    subtitle.style.color = "rgba(255,255,255,0.82)";
 
+    header.appendChild(title);
+    header.appendChild(subtitle);
+
+    const statusTone = getStatusTone(draft);
     const status = document.createElement("div");
     status.textContent = getStatusLabel(draft);
-    status.style.marginTop = "10px";
+    status.style.marginTop = "12px";
+    status.style.padding = "10px 12px";
+    status.style.borderRadius = "14px";
+    status.style.background = statusTone.bg;
+    status.style.border = `1px solid ${statusTone.border}`;
     status.style.fontSize = "13px";
     status.style.lineHeight = "1.45";
-    status.style.opacity = "0.95";
-    status.style.color = draft.status === "failed" ? "#ffb4a3" : "#d9f99d";
+    status.style.color = statusTone.ink;
 
     const help = document.createElement("div");
     help.textContent = "AristAI will try to create a notebook source automatically. You can still copy the draft manually if NotebookLM changes its UI.";
     help.style.marginTop = "10px";
     help.style.fontSize = "13px";
     help.style.lineHeight = "1.45";
-    help.style.opacity = "0.9";
+    help.style.color = "rgba(255,255,255,0.76)";
 
     const actions = document.createElement("div");
     actions.style.display = "flex";
@@ -454,7 +541,8 @@
       await patchDraft({
         autoImport: true,
         status: "pending",
-        error: ""
+        error: "",
+        importAttemptCount: 0
       });
       await renderDraftPanel();
       maybeAutoImportDraft();
@@ -481,6 +569,7 @@
       notebookLink.style.marginTop = "12px";
       notebookLink.style.color = "#9bd1ff";
       notebookLink.style.textDecoration = "none";
+      notebookLink.style.fontWeight = "600";
     }
 
     const content = document.createElement("pre");
@@ -489,13 +578,15 @@
     content.style.padding = "12px";
     content.style.borderRadius = "12px";
     content.style.background = "rgba(255,255,255,0.08)";
+    content.style.border = "1px solid rgba(255,255,255,0.06)";
     content.style.whiteSpace = "pre-wrap";
     content.style.wordBreak = "break-word";
     content.style.fontSize = "12px";
     content.style.lineHeight = "1.45";
+    content.style.maxHeight = "360px";
+    content.style.overflow = "auto";
 
-    panel.appendChild(title);
-    panel.appendChild(subtitle);
+    panel.appendChild(header);
     panel.appendChild(status);
     panel.appendChild(help);
     panel.appendChild(actions);
