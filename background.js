@@ -3,7 +3,9 @@ const DEFAULT_AI_SETTINGS = {
   provider: "ollama",
   model: "qwen3:8b",
   baseUrl: "http://127.0.0.1:11434",
-  apiKey: ""
+  apiKey: "",
+  notebookTarget: "open-notebook",
+  openNotebookUrl: "http://localhost:8502"
 };
 
 function normalizeAiSettings(rawSettings) {
@@ -12,7 +14,9 @@ function normalizeAiSettings(rawSettings) {
     provider: String(settings.provider || DEFAULT_AI_SETTINGS.provider).trim() || DEFAULT_AI_SETTINGS.provider,
     model: String(settings.model || DEFAULT_AI_SETTINGS.model).trim() || DEFAULT_AI_SETTINGS.model,
     baseUrl: String(settings.baseUrl || DEFAULT_AI_SETTINGS.baseUrl).trim() || DEFAULT_AI_SETTINGS.baseUrl,
-    apiKey: String(settings.apiKey || "").trim()
+    apiKey: String(settings.apiKey || "").trim(),
+    notebookTarget: String(settings.notebookTarget || DEFAULT_AI_SETTINGS.notebookTarget).trim() || DEFAULT_AI_SETTINGS.notebookTarget,
+    openNotebookUrl: String(settings.openNotebookUrl || DEFAULT_AI_SETTINGS.openNotebookUrl).trim() || DEFAULT_AI_SETTINGS.openNotebookUrl
   };
 }
 
@@ -42,6 +46,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "OPEN_NOTEBOOKLM") {
     chrome.tabs.create({ url: "https://notebooklm.google.com/" }, (tab) => {
       sendResponse({ success: true, tabId: tab?.id });
+    });
+    return true;
+  }
+
+  if (message.type === "OPEN_NOTEBOOK_TARGET") {
+    chrome.storage.local.get([AI_SETTINGS_KEY], (result) => {
+      const settings = normalizeAiSettings(result[AI_SETTINGS_KEY]);
+      const url = settings.notebookTarget === "google-notebooklm"
+        ? "https://notebooklm.google.com/"
+        : settings.openNotebookUrl;
+
+      chrome.tabs.create({ url }, (tab) => {
+        sendResponse({
+          success: true,
+          tabId: tab?.id,
+          target: settings.notebookTarget,
+          url
+        });
+      });
     });
     return true;
   }
@@ -137,7 +160,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         provider: settings.provider,
         baseUrl: settings.baseUrl,
         hasApiKey: Boolean(settings.apiKey),
-        model: settings.model
+        apiKey: settings.apiKey,
+        model: settings.model,
+        notebookTarget: settings.notebookTarget,
+        openNotebookUrl: settings.openNotebookUrl
       });
     });
     return true;
@@ -148,7 +174,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       provider: message.provider,
       baseUrl: message.baseUrl,
       apiKey: message.apiKey,
-      model: message.model
+      model: message.model,
+      notebookTarget: message.notebookTarget,
+      openNotebookUrl: message.openNotebookUrl
     });
 
     chrome.storage.local.set({
@@ -159,7 +187,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         provider: settings.provider,
         baseUrl: settings.baseUrl,
         hasApiKey: Boolean(settings.apiKey),
-        model: settings.model
+        apiKey: settings.apiKey,
+        model: settings.model,
+        notebookTarget: settings.notebookTarget,
+        openNotebookUrl: settings.openNotebookUrl
       });
     });
     return true;

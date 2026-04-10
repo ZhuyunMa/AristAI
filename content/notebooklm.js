@@ -97,6 +97,27 @@
     }
   }
 
+  async function markDraftImported(notebookUrl = location.href) {
+    const draft = await getDraft();
+    if (!draft?.videoId) {
+      return;
+    }
+
+    const importedAt = new Date().toISOString();
+    await patchDraft({
+      status: "completed",
+      autoImport: false,
+      notebookUrl,
+      importedAt,
+      error: ""
+    });
+
+    await updateQueueNotebookRelation(draft.videoId, {
+      notebookLmNotebookUrl: notebookUrl,
+      notebookLmImportedAt: importedAt
+    });
+  }
+
   function getStatusLabel(draft) {
     if (draft.status === "running") {
       return `Auto-importing into NotebookLM...${draft.importAttemptCount ? ` Attempt ${draft.importAttemptCount}.` : ""}`;
@@ -515,7 +536,7 @@
     status.style.color = statusTone.ink;
 
     const help = document.createElement("div");
-    help.textContent = "AristAI will try to create a notebook source automatically. You can still copy the draft manually if NotebookLM changes its UI.";
+    help.textContent = "AristAI will try to create a notebook source automatically. If NotebookLM changes its UI, import the copied text manually and then click Mark Imported.";
     help.style.marginTop = "10px";
     help.style.fontSize = "13px";
     help.style.lineHeight = "1.45";
@@ -554,8 +575,15 @@
       removePanel();
     });
 
+    const markImportedBtn = createButton("Mark Imported");
+    markImportedBtn.addEventListener("click", async () => {
+      await markDraftImported(location.href);
+      await renderDraftPanel();
+    });
+
     actions.appendChild(copyBtn);
     actions.appendChild(retryBtn);
+    actions.appendChild(markImportedBtn);
     actions.appendChild(clearBtn);
 
     let notebookLink = null;

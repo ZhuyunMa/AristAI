@@ -1,12 +1,30 @@
 let selectedVideoId = null;
+let selectedNotebookId = null;
 let isRendering = false;
 const NOTEBOOKLM_DRAFT_KEY = "notebooklmDraft";
+const NOTEBOOKS_KEY = "notebooks";
+const SELECTED_NOTEBOOK_KEY = "selectedNotebookId";
 let currentAiSettings = {
   provider: "ollama",
-  model: "qwen3:8b"
+  model: "qwen3:8b",
+  notebookTarget: "open-notebook",
+  openNotebookUrl: "http://localhost:8502"
 };
 let summaryInFlightForVideoId = null;
 let askAiInFlightForVideoId = null;
+let notebookSummaryInFlightForNotebookId = null;
+let notebookAskAiInFlightForNotebookId = null;
+let notebookPresentationInFlightForNotebookId = null;
+
+function createNotebook(title = "Research Workspace") {
+  return {
+    id: `notebook-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    title,
+    sourceVideoIds: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+}
 
 function getRefreshButton() {
   return document.getElementById("refreshBtn");
@@ -56,6 +74,76 @@ async function setQueue(queue) {
   await chrome.storage.local.set({ queue });
 }
 
+async function getNotebookState() {
+  const result = await chrome.storage.local.get([NOTEBOOKS_KEY, SELECTED_NOTEBOOK_KEY]);
+  let notebooks = Array.isArray(result[NOTEBOOKS_KEY]) ? result[NOTEBOOKS_KEY] : [];
+  let currentSelectedNotebookId = result[SELECTED_NOTEBOOK_KEY] || null;
+  let changed = false;
+
+  if (!notebooks.length) {
+    const defaultNotebook = createNotebook("My First Workspace");
+    notebooks = [defaultNotebook];
+    currentSelectedNotebookId = defaultNotebook.id;
+    changed = true;
+  }
+
+  if (!currentSelectedNotebookId || !notebooks.some((notebook) => notebook.id === currentSelectedNotebookId)) {
+    currentSelectedNotebookId = notebooks[0].id;
+    changed = true;
+  }
+
+  if (changed) {
+    await chrome.storage.local.set({
+      [NOTEBOOKS_KEY]: notebooks,
+      [SELECTED_NOTEBOOK_KEY]: currentSelectedNotebookId
+    });
+  }
+
+  selectedNotebookId = currentSelectedNotebookId;
+
+  return {
+    notebooks,
+    selectedNotebookId: currentSelectedNotebookId,
+    selectedNotebook: notebooks.find((notebook) => notebook.id === currentSelectedNotebookId) || notebooks[0]
+  };
+}
+
+async function setNotebookState(notebooks, nextSelectedNotebookId = selectedNotebookId) {
+  selectedNotebookId = nextSelectedNotebookId;
+  await chrome.storage.local.set({
+    [NOTEBOOKS_KEY]: notebooks,
+    [SELECTED_NOTEBOOK_KEY]: nextSelectedNotebookId
+  });
+}
+
+async function updateNotebook(notebookId, updater) {
+  const state = await getNotebookState();
+  const nextNotebooks = state.notebooks.map((notebook) => {
+    if (notebook.id !== notebookId) {
+      return notebook;
+    }
+
+    const nextNotebook = typeof updater === "function" ? updater(notebook) : notebook;
+    return {
+      ...nextNotebook,
+      updatedAt: new Date().toISOString()
+    };
+  });
+
+  await setNotebookState(nextNotebooks, state.selectedNotebookId);
+  return nextNotebooks.find((notebook) => notebook.id === notebookId) || null;
+}
+
+function getNotebookSourceItems(queue, notebook) {
+  if (!notebook?.sourceVideoIds?.length) {
+    return [];
+  }
+
+  return notebook.sourceVideoIds
+    .map((videoId) => queue.find((item) => item.id === videoId))
+    .filter(Boolean);
+}
+
 async function setNotebookDraft(draft) {
   await chrome.storage.local.set({ [NOTEBOOKLM_DRAFT_KEY]: draft });
 }
@@ -68,6 +156,36 @@ async function updateQueueItem(id, updater) {
   });
   await setQueue(nextQueue);
   return nextQueue;
+}
+
+function invalidateDerivedVideoState(oldItem, patch) {
+  const nextTranscript = cleanTranscript(patch?.transcript ?? oldItem?.transcript ?? "");
+  const prevTranscript = cleanTranscript(oldItem?.transcript || "");
+  const transcriptChanged = nextTranscript !== prevTranscript;
+
+  const nextItem = {
+    ...oldItem,
+    ...patch
+  };
+
+  if (!transcriptChanged) {
+    return nextItem;
+  }
+
+  return {
+    ...nextItem,
+    summary: "",
+    summarySource: "",
+    summaryUpdatedAt: "",
+    lastQuestion: "",
+    lastAiResponse: "",
+    lastAiModel: "",
+    lastAiSources: [],
+    chatHistory: [],
+    lastNotebookLmExportAt: "",
+    notebookLmImportedAt: "",
+    notebookLmNotebookUrl: ""
+  };
 }
 
 function sendMessageToTab(tabId, message) {
@@ -131,6 +249,13 @@ async function removeItem(id) {
   const queue = await getQueue();
   const nextQueue = queue.filter((item) => item.id !== id);
   await setQueue(nextQueue);
+  const notebookState = await getNotebookState();
+  const nextNotebooks = notebookState.notebooks.map((notebook) => ({
+    ...notebook,
+    sourceVideoIds: (Array.isArray(notebook.sourceVideoIds) ? notebook.sourceVideoIds : []).filter((videoId) => videoId !== id),
+    updatedAt: new Date().toISOString()
+  }));
+  await setNotebookState(nextNotebooks, notebookState.selectedNotebookId);
 
   if (selectedVideoId === id) {
     selectedVideoId = nextQueue[0]?.id || null;
@@ -150,6 +275,13 @@ async function removeItem(id) {
 
 async function clearQueue() {
   await setQueue([]);
+  const notebookState = await getNotebookState();
+  const clearedNotebooks = notebookState.notebooks.map((notebook) => ({
+    ...notebook,
+    sourceVideoIds: [],
+    updatedAt: new Date().toISOString()
+  }));
+  await setNotebookState(clearedNotebooks, notebookState.selectedNotebookId);
   selectedVideoId = null;
 
   try {
@@ -159,6 +291,256 @@ async function clearQueue() {
     });
   } catch (error) {
     console.warn("Failed to notify queue clear:", error);
+  }
+
+  renderQueue();
+}
+
+async function createNotebookFromPrompt() {
+  const title = window.prompt("Workspace name", "Research Workspace");
+  if (title === null) {
+    return;
+  }
+
+  const trimmedTitle = title.trim();
+  if (!trimmedTitle) {
+    alert("Workspace name cannot be empty.");
+    return;
+  }
+
+  const state = await getNotebookState();
+  const notebook = createNotebook(trimmedTitle);
+  const nextNotebooks = [notebook, ...state.notebooks];
+  await setNotebookState(nextNotebooks, notebook.id);
+  renderQueue();
+}
+
+async function renameSelectedNotebook() {
+  const state = await getNotebookState();
+  const notebook = state.selectedNotebook;
+  if (!notebook) {
+    return;
+  }
+
+  const title = window.prompt("Rename workspace", notebook.title || "Research Workspace");
+  if (title === null) {
+    return;
+  }
+
+  const trimmedTitle = title.trim();
+  if (!trimmedTitle) {
+    alert("Workspace name cannot be empty.");
+    return;
+  }
+
+  await updateNotebook(notebook.id, (currentNotebook) => ({
+    ...currentNotebook,
+    title: trimmedTitle
+  }));
+
+  renderQueue();
+}
+
+async function deleteSelectedNotebook() {
+  const state = await getNotebookState();
+  const notebook = state.selectedNotebook;
+  if (!notebook) {
+    return;
+  }
+
+  const confirmed = window.confirm(`Delete workspace "${notebook.title}"?`);
+  if (!confirmed) {
+    return;
+  }
+
+  let nextNotebooks = state.notebooks.filter((item) => item.id !== notebook.id);
+  let nextSelectedId = nextNotebooks[0]?.id || null;
+
+  if (!nextNotebooks.length) {
+    const fallbackNotebook = createNotebook("My First Workspace");
+    nextNotebooks = [fallbackNotebook];
+    nextSelectedId = fallbackNotebook.id;
+  }
+
+  await setNotebookState(nextNotebooks, nextSelectedId);
+
+  const nextSelectedNotebook = nextNotebooks.find((item) => item.id === nextSelectedId);
+  selectedVideoId = nextSelectedNotebook?.sourceVideoIds?.[0] || selectedVideoId;
+  renderQueue();
+}
+
+async function addSelectedVideoToNotebook() {
+  if (!selectedVideoId) {
+    alert("Select a video first.");
+    return;
+  }
+
+  const state = await getNotebookState();
+  if (!state.selectedNotebook) {
+    alert("Create a workspace first.");
+    return;
+  }
+
+  await updateNotebook(state.selectedNotebook.id, (notebook) => ({
+    ...notebook,
+    sourceVideoIds: Array.from(new Set([...(Array.isArray(notebook.sourceVideoIds) ? notebook.sourceVideoIds : []), selectedVideoId]))
+  }));
+
+  renderQueue();
+}
+
+async function addAllQueueVideosToNotebook() {
+  const state = await getNotebookState();
+  if (!state.selectedNotebook) {
+    alert("Create a workspace first.");
+    return;
+  }
+
+  const queue = await getQueue();
+  if (!queue.length) {
+    alert("No queued videos to add.");
+    return;
+  }
+
+  await updateNotebook(state.selectedNotebook.id, (notebook) => ({
+    ...notebook,
+    sourceVideoIds: Array.from(
+      new Set([
+        ...(Array.isArray(notebook.sourceVideoIds) ? notebook.sourceVideoIds : []),
+        ...queue.map((item) => item.id).filter(Boolean)
+      ])
+    )
+  }));
+
+  renderQueue();
+}
+
+async function copyNotebookSourceUrls() {
+  const state = await getNotebookState();
+  const queue = await getQueue();
+  const sourceItems = getNotebookSourceItems(queue, state.selectedNotebook);
+
+  if (!sourceItems.length) {
+    alert("This notebook has no source URLs yet.");
+    return;
+  }
+
+  const urls = sourceItems
+    .map((item) => item.url)
+    .filter(Boolean)
+    .join("\n");
+
+  try {
+    await navigator.clipboard.writeText(urls);
+    alert("Notebook source URLs copied.");
+  } catch (error) {
+    console.error("Failed to copy workspace source URLs:", error);
+    alert("Failed to copy workspace source URLs.");
+  }
+}
+
+async function handleGeneratePresentationPrompt() {
+  const notebookState = await getNotebookState();
+  const notebook = notebookState.selectedNotebook;
+  const queue = await getQueue();
+  const sourceItems = getNotebookSourceItems(queue, notebook);
+
+  if (!notebook || !sourceItems.length) {
+    alert("Add workspace sources first.");
+    return;
+  }
+
+  notebookPresentationInFlightForNotebookId = notebook.id;
+  renderQueue();
+
+  try {
+    const promptRequest = buildNotebookPresentationPromptRequest(notebook, sourceItems);
+    const aiResult = await requestAiText(promptRequest);
+    const generatedText = String(aiResult?.text || "").trim();
+
+    await updateNotebook(notebook.id, (currentNotebook) => ({
+      ...currentNotebook,
+      presentationPrompt: generatedText || buildNotebookPresentationPromptFallback(notebook, sourceItems),
+      presentationSource: generatedText ? "deck+ai" : "deck+template",
+      presentationPromptUpdatedAt: new Date().toISOString()
+    }));
+  } finally {
+    notebookPresentationInFlightForNotebookId = null;
+    renderQueue();
+  }
+}
+
+async function handleCopyPresentationPrompt() {
+  const notebookState = await getNotebookState();
+  const notebook = notebookState.selectedNotebook;
+
+  if (!notebook?.presentationPrompt) {
+    alert("Generate a presentation prompt first.");
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(notebook.presentationPrompt);
+    alert("Presentation prompt copied.");
+  } catch (error) {
+    console.error("Failed to copy presentation prompt:", error);
+    alert("Failed to copy presentation prompt.");
+  }
+}
+
+async function handleOpenNotebookStudio() {
+  const notebookState = await getNotebookState();
+  const notebook = notebookState.selectedNotebook;
+
+  if (notebook?.presentationPrompt) {
+    try {
+      await navigator.clipboard.writeText(notebook.presentationPrompt);
+    } catch (error) {
+      console.warn("Failed to copy presentation prompt before opening NotebookLM:", error);
+    }
+  }
+
+  try {
+    await chrome.runtime.sendMessage({ type: "OPEN_NOTEBOOK_TARGET" });
+  } catch (error) {
+    console.warn("Failed to open primary notebook app:", error);
+  }
+}
+
+async function handleCopyOpenNotebookMarkdown() {
+  const notebookState = await getNotebookState();
+  const notebook = notebookState.selectedNotebook;
+  const queue = await getQueue();
+  const sourceItems = getNotebookSourceItems(queue, notebook);
+
+  if (!notebook || !sourceItems.length) {
+    alert("Add workspace sources first.");
+    return;
+  }
+
+  const markdown = buildOpenNotebookMarkdown(notebook, sourceItems);
+  try {
+    await navigator.clipboard.writeText(markdown);
+    alert("Notebook markdown copied for Open Notebook.");
+  } catch (error) {
+    console.error("Failed to copy notebook markdown:", error);
+    alert("Failed to copy notebook markdown.");
+  }
+}
+
+async function removeVideoFromNotebook(videoId) {
+  const state = await getNotebookState();
+  if (!state.selectedNotebook) {
+    return;
+  }
+
+  const updatedNotebook = await updateNotebook(state.selectedNotebook.id, (notebook) => ({
+    ...notebook,
+    sourceVideoIds: (Array.isArray(notebook.sourceVideoIds) ? notebook.sourceVideoIds : []).filter((id) => id !== videoId)
+  }));
+
+  if (selectedVideoId === videoId) {
+    selectedVideoId = updatedNotebook?.sourceVideoIds?.[0] || selectedVideoId;
   }
 
   renderQueue();
@@ -250,6 +632,30 @@ function getSummaryChipState(item) {
   return { label: "Pending", tone: "neutral" };
 }
 
+function getTranscriptChipState(item) {
+  if (!item) {
+    return { label: "Missing", tone: "neutral" };
+  }
+
+  if (item.manualTranscript) {
+    return { label: "Manual", tone: "active" };
+  }
+
+  if (item.transcript) {
+    return { label: "Ready", tone: "success" };
+  }
+
+  if (item.transcriptStatus === "error") {
+    return { label: "Error", tone: "error" };
+  }
+
+  if (item.transcriptStatus === "unavailable") {
+    return { label: "Missing", tone: "warn" };
+  }
+
+  return { label: "Missing", tone: "neutral" };
+}
+
 function getNotebookChipState(item) {
   if (!item) {
     return { label: "Draft", tone: "neutral" };
@@ -311,6 +717,25 @@ function createQueueItem(item, isSelected) {
         <button class="select-btn" data-id="${item.id}">View Details</button>
         <button class="remove-btn" data-id="${item.id}">Remove</button>
       </div>
+    </div>
+  `;
+
+  return wrapper;
+}
+
+function createNotebookSourceItem(item, isSelected) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "source-item";
+  if (isSelected) {
+    wrapper.classList.add("active");
+  }
+
+  wrapper.innerHTML = `
+    <div class="source-item-title">${escapeHtml(item.title || "Untitled")}</div>
+    <div class="source-item-meta">${escapeHtml(item.channel || "Unknown Channel")}</div>
+    <div class="source-item-actions">
+      <button class="open-source-btn" data-id="${item.id}">Open Source</button>
+      <button class="remove-source-btn secondary-btn" data-id="${item.id}">Remove</button>
     </div>
   `;
 
@@ -382,6 +807,35 @@ function buildTranscriptSummary(item) {
   }
 
   return lines.join("\n");
+}
+
+function buildTranscriptMeta(item) {
+  if (!item?.transcript) {
+    if (item?.transcriptError) {
+      return `Transcript status: ${item.transcriptStatus || "unavailable"}. ${item.transcriptError}`;
+    }
+
+    return "No transcript captured yet. Retry fetch or paste one manually.";
+  }
+
+  const transcriptWordCount = cleanTranscript(item.transcript).split(/\s+/).filter(Boolean).length;
+  const sourceLabel = item.manualTranscript
+    ? "manual transcript"
+    : (item.transcriptLabel || item.transcriptLanguage || item.transcriptStatus || "captured transcript");
+  const capturedAt = item.transcriptFetchedAt
+    ? ` Saved ${new Date(item.transcriptFetchedAt).toLocaleString()}.`
+    : "";
+
+  return `Transcript source: ${sourceLabel}. ${transcriptWordCount} words.${capturedAt}`;
+}
+
+function buildTranscriptPreview(item) {
+  const transcript = cleanTranscript(item?.transcript || "");
+  if (!transcript) {
+    return "No transcript yet.";
+  }
+
+  return clipText(transcript, 1200);
 }
 
 function buildFakeAiResponse(item, question) {
@@ -571,9 +1025,260 @@ function buildNotebookLmExport(item) {
     lines.push("");
   }
 
-  lines.push("Prepared by AristAI for NotebookLM.");
+  lines.push("Prepared by AristAI as an optional external export bundle.");
 
   return lines.join("\n");
+}
+
+function buildOpenNotebookMarkdown(notebook, sourceItems) {
+  const lines = [
+    `# ${notebook?.title || "Research Workspace"}`,
+    "",
+    "Exported from AristAI for Open Notebook.",
+    ""
+  ];
+
+  if (notebook?.summary) {
+    lines.push("## Workspace Summary");
+    lines.push(String(notebook.summary).trim());
+    lines.push("");
+  }
+
+  sourceItems.forEach((item, index) => {
+    lines.push(`## Source ${index + 1}: ${item.title || "Untitled"}`);
+    lines.push(`Channel: ${item.channel || "Unknown Channel"}`);
+    if (item.url) {
+      lines.push(`URL: ${item.url}`);
+    }
+    if (item.summary) {
+      lines.push("");
+      lines.push("Summary:");
+      lines.push(String(item.summary).trim());
+    }
+    const description = cleanDescription(item.description || "");
+    if (description) {
+      lines.push("");
+      lines.push("Description:");
+      lines.push(description);
+    }
+    const transcript = cleanTranscript(item.transcript || "");
+    if (transcript) {
+      lines.push("");
+      lines.push("Transcript:");
+      lines.push(clipText(transcript, 6000));
+    }
+    lines.push("");
+  });
+
+  return lines.join("\n");
+}
+
+function buildNotebookSourceContext(item) {
+  const parts = [
+    `Source title: ${item.title || "Untitled"}`,
+    `Channel: ${item.channel || "Unknown Channel"}`
+  ];
+
+  if (item.summary) {
+    parts.push(`Summary: ${item.summary}`);
+  }
+
+  const cleanedDescription = buildDescriptionContext(item);
+  if (cleanedDescription) {
+    parts.push(`Description: ${cleanedDescription}`);
+  }
+
+  const transcriptContext = buildTranscriptContext(item);
+  if (transcriptContext) {
+    parts.push(`Transcript excerpt: ${transcriptContext}`);
+  }
+
+  return parts.join("\n");
+}
+
+function buildNotebookSummaryPrompt(notebook, sourceItems) {
+  const sections = [
+    "You are summarizing a research notebook that contains multiple YouTube sources.",
+    "Write a concise notebook-level synthesis in plain text.",
+    "Focus on the shared themes, notable differences, and the most important takeaways across the sources.",
+    "Keep the answer to 5-7 sentences.",
+    "Do not output headings or bullets.",
+    "",
+    `Notebook title: ${notebook.title || "Untitled Notebook"}`,
+    `Source count: ${sourceItems.length}`,
+    ""
+  ];
+
+  sourceItems.forEach((item, index) => {
+    sections.push(`Source ${index + 1}`);
+    sections.push(buildNotebookSourceContext(item));
+    sections.push("");
+  });
+
+  sections.push("Notebook summary:");
+  return sections.join("\n");
+}
+
+function buildNotebookAskAiPrompt(notebook, sourceItems, question) {
+  const history = Array.isArray(notebook.chatHistory) ? notebook.chatHistory.slice(-8) : [];
+  const sections = [
+    "You are answering questions about a notebook that contains multiple YouTube video sources.",
+    "Use only the provided source context.",
+    "If the sources are incomplete, say so briefly rather than inventing details.",
+    "When possible, mention which source or channel supports the answer.",
+    "",
+    `Notebook title: ${notebook.title || "Untitled Notebook"}`,
+    `User question: ${question}`,
+    ""
+  ];
+
+  sourceItems.forEach((item, index) => {
+    sections.push(`Source ${index + 1}`);
+    sections.push(buildNotebookSourceContext(item));
+    sections.push("");
+  });
+
+  if (history.length) {
+    sections.push("Recent notebook conversation:");
+    history.forEach((entry) => {
+      sections.push(`${entry.role === "assistant" ? "Assistant" : "User"}: ${entry.content}`);
+    });
+    sections.push("");
+  }
+
+  sections.push("Respond in concise plain text and ground the answer in the workspace sources.");
+  return sections.join("\n");
+}
+
+function buildNotebookPresentationPromptRequest(notebook, sourceItems) {
+  const sections = [
+    "You are writing a prompt for generating a presentation deck in a notebook-style research app.",
+    "Return only the prompt text that the user should paste into the target app's slide deck generator.",
+    "Ask for a polished 8-10 slide presentation grounded only in the provided notebook context.",
+    "Ask for a logical narrative arc, strong slide titles, 3-5 concrete bullets per slide, and concise speaker notes.",
+    "Request a title slide, overview, key themes, evidence/examples, why it matters, and a closing takeaway slide.",
+    "Do not include markdown fences.",
+    "",
+    `Notebook title: ${notebook.title || "Untitled Notebook"}`,
+    ""
+  ];
+
+  if (notebook.summary) {
+    sections.push("Notebook summary:");
+    sections.push(notebook.summary);
+    sections.push("");
+  }
+
+  sections.push("Source context:");
+  sourceItems.forEach((item, index) => {
+    sections.push(`Source ${index + 1}`);
+    sections.push(buildNotebookSourceContext(item));
+    sections.push("");
+  });
+
+  sections.push("Presentation prompt:");
+  return sections.join("\n");
+}
+
+function buildNotebookPresentationPromptFallback(notebook, sourceItems) {
+  const sourceLines = sourceItems.map((item, index) => {
+    const title = item.title || `Source ${index + 1}`;
+    const channel = item.channel || "Unknown Channel";
+    return `- Source ${index + 1}: "${title}" by ${channel}`;
+  });
+
+  const promptLines = [
+    `Create a polished slide deck based only on the sources in my workspace "${notebook?.title || "Research Workspace"}".`,
+    "Build 8-10 slides with a clear narrative arc.",
+    "Include a title slide, overview, major themes, evidence/examples, implications, and closing takeaways.",
+    "For each slide, provide a slide title, 3-5 concise bullets, and short speaker notes.",
+    "Keep the deck factual, specific, and grounded in the workspace sources.",
+    "Avoid generic filler."
+  ];
+
+  if (notebook?.summary) {
+    promptLines.push("");
+    promptLines.push("Use this workspace summary as the main synthesis:");
+    promptLines.push(notebook.summary);
+  }
+
+  promptLines.push("");
+  promptLines.push("Notebook sources:");
+  promptLines.push(...sourceLines);
+
+  return promptLines.join("\n");
+}
+
+function getNotebookSourceLabels(sourceItems) {
+  return sourceItems.map((item) => item.channel || item.title || item.id).slice(0, 6);
+}
+
+function appendNotebookChatHistory(notebook, question, answer, sourceLabels) {
+  const existing = Array.isArray(notebook.chatHistory) ? notebook.chatHistory : [];
+  const nextHistory = [
+    ...existing,
+    {
+      role: "user",
+      content: question,
+      createdAt: new Date().toISOString()
+    },
+    {
+      role: "assistant",
+      content: answer,
+      sources: sourceLabels,
+      createdAt: new Date().toISOString()
+    }
+  ];
+
+  return nextHistory.slice(-12);
+}
+
+function getNotebookSummaryChipState(notebook) {
+  if (!notebook) {
+    return { label: "Pending", tone: "neutral" };
+  }
+
+  if (notebookSummaryInFlightForNotebookId === notebook.id) {
+    return { label: "Generating", tone: "active" };
+  }
+
+  if (notebook.summary) {
+    return { label: "Ready", tone: "success" };
+  }
+
+  return { label: "Pending", tone: "neutral" };
+}
+
+function getNotebookAskAiChipState(notebook) {
+  if (!notebook) {
+    return { label: "Ready", tone: "neutral" };
+  }
+
+  if (notebookAskAiInFlightForNotebookId === notebook.id) {
+    return { label: "Thinking", tone: "active" };
+  }
+
+  if (notebook.lastAiResponse) {
+    return { label: "Answered", tone: "success" };
+  }
+
+  return { label: "Ready", tone: "neutral" };
+}
+
+function getNotebookPresentationChipState(notebook) {
+  if (!notebook) {
+    return { label: "Draft", tone: "neutral" };
+  }
+
+  if (notebookPresentationInFlightForNotebookId === notebook.id) {
+    return { label: "Generating", tone: "active" };
+  }
+
+  if (notebook.presentationPrompt) {
+    return { label: "Ready", tone: "success" };
+  }
+
+  return { label: "Draft", tone: "neutral" };
 }
 
 function cleanDescription(description) {
@@ -640,7 +1345,7 @@ function getSourceLabels(item) {
   const labels = [];
 
   if (item.transcript) {
-    labels.push("transcript");
+    labels.push(item.manualTranscript ? "manual-transcript" : "transcript");
   }
 
   if (item.summary) {
@@ -687,6 +1392,248 @@ function refreshAiHint() {
   askAiHint.textContent = `Using ${currentAiSettings.provider} / ${currentAiSettings.model}`;
 }
 
+async function handleRefetchTranscript() {
+  const queue = await getQueue();
+  const item = queue.find((video) => video.id === selectedVideoId);
+
+  if (!item) {
+    alert("Please select a video first.");
+    return;
+  }
+
+  const transcriptMeta = document.getElementById("transcriptMeta");
+  const transcriptBox = document.getElementById("transcriptBox");
+  const transcriptChip = document.getElementById("transcriptChip");
+
+  if (transcriptMeta) {
+    transcriptMeta.textContent = "Transcript fetch in progress...";
+  }
+  if (transcriptBox) {
+    transcriptBox.textContent = "Trying the YouTube transcript fallbacks again...";
+  }
+  if (transcriptChip) {
+    setStatusPill(transcriptChip, "Working", "active");
+  }
+
+  const response = await requestTranscriptFromOpenYouTubeTab(item);
+  if (!response?.success) {
+    renderQueue();
+    alert(`Transcript fetch failed.\n\n${response?.error || "Unknown error."}\n\nYou can still paste a transcript manually below.`);
+    return;
+  }
+
+  const nextTranscript = cleanTranscript(response.item?.transcript || "");
+  const transcriptChanged = nextTranscript !== cleanTranscript(item.transcript || "");
+
+  await updateQueueItem(item.id, (oldItem) => {
+    const nextItem = {
+      ...oldItem,
+      transcript: nextTranscript,
+      transcriptStatus: response.item?.transcriptStatus || oldItem.transcriptStatus || "ready",
+      transcriptLanguage: response.item?.transcriptLanguage || "",
+      transcriptLabel: response.item?.transcriptLabel || "",
+      transcriptError: response.item?.transcriptError || "",
+      transcriptFetchedAt: response.item?.transcriptFetchedAt || new Date().toISOString(),
+      manualTranscript: false
+    };
+
+    if (!transcriptChanged) {
+      return nextItem;
+    }
+
+    return invalidateDerivedVideoState(oldItem, nextItem);
+  });
+
+  renderQueue();
+}
+
+async function handleSaveManualTranscript() {
+  const queue = await getQueue();
+  const item = queue.find((video) => video.id === selectedVideoId);
+
+  if (!item) {
+    alert("Please select a video first.");
+    return;
+  }
+
+  const manualTranscriptInput = document.getElementById("manualTranscriptInput");
+  const transcript = cleanTranscript(manualTranscriptInput?.value || "");
+  if (!transcript) {
+    alert("Paste a transcript first.");
+    return;
+  }
+
+  await updateQueueItem(item.id, (oldItem) => invalidateDerivedVideoState(oldItem, {
+    transcript,
+    transcriptStatus: "ready",
+    transcriptLanguage: oldItem.transcriptLanguage || "",
+    transcriptLabel: "manual transcript",
+    transcriptError: "",
+    transcriptFetchedAt: new Date().toISOString(),
+    manualTranscript: true
+  }));
+
+  renderQueue();
+}
+
+async function handleClearTranscript() {
+  const queue = await getQueue();
+  const item = queue.find((video) => video.id === selectedVideoId);
+
+  if (!item) {
+    alert("Please select a video first.");
+    return;
+  }
+
+  await updateQueueItem(item.id, (oldItem) => invalidateDerivedVideoState(oldItem, {
+    transcript: "",
+    transcriptStatus: "manual-cleared",
+    transcriptLanguage: "",
+    transcriptLabel: "",
+    transcriptError: "",
+    transcriptFetchedAt: "",
+    manualTranscript: false
+  }));
+
+  renderQueue();
+}
+
+function renderNotebookWorkspace(queue, notebookState) {
+  const notebookSelect = document.getElementById("notebookSelect");
+  const workspaceChip = document.getElementById("workspaceChip");
+  const workspaceTitle = document.getElementById("workspaceTitle");
+  const workspaceMeta = document.getElementById("workspaceMeta");
+  const notebookSourceChip = document.getElementById("notebookSourceChip");
+  const notebookSourcesEmptyState = document.getElementById("notebookSourcesEmptyState");
+  const notebookSourcesList = document.getElementById("notebookSourcesList");
+  const addToNotebookBtn = document.getElementById("addToNotebookBtn");
+  const addAllToNotebookBtn = document.getElementById("addAllToNotebookBtn");
+  const copyNotebookUrlsBtn = document.getElementById("copyNotebookUrlsBtn");
+  const copyNotebookMarkdownBtn = document.getElementById("copyNotebookMarkdownBtn");
+  const renameNotebookBtn = document.getElementById("renameNotebookBtn");
+  const deleteNotebookBtn = document.getElementById("deleteNotebookBtn");
+  const notebookSummaryChip = document.getElementById("notebookSummaryChip");
+  const notebookSummaryMeta = document.getElementById("notebookSummaryMeta");
+  const notebookSummaryBox = document.getElementById("notebookSummaryBox");
+  const notebookAskAiChip = document.getElementById("notebookAskAiChip");
+  const notebookAskAiMeta = document.getElementById("notebookAskAiMeta");
+  const notebookAskAiInput = document.getElementById("notebookAskAiInput");
+  const notebookAskAiResponse = document.getElementById("notebookAskAiResponse");
+  const notebookAskAiSources = document.getElementById("notebookAskAiSources");
+  const presentationChip = document.getElementById("presentationChip");
+  const presentationMeta = document.getElementById("presentationMeta");
+  const presentationPromptBox = document.getElementById("presentationPromptBox");
+  const generatePresentationBtn = document.getElementById("generatePresentationBtn");
+  const copyPresentationBtn = document.getElementById("copyPresentationBtn");
+  const openNotebookStudioBtn = document.getElementById("openNotebookStudioBtn");
+
+  if (!notebookSelect || !workspaceChip || !workspaceTitle || !workspaceMeta || !notebookSourceChip || !notebookSourcesEmptyState || !notebookSourcesList || !addToNotebookBtn || !addAllToNotebookBtn || !copyNotebookUrlsBtn || !copyNotebookMarkdownBtn || !renameNotebookBtn || !deleteNotebookBtn || !notebookSummaryChip || !notebookSummaryMeta || !notebookSummaryBox || !notebookAskAiChip || !notebookAskAiMeta || !notebookAskAiInput || !notebookAskAiResponse || !notebookAskAiSources || !presentationChip || !presentationMeta || !presentationPromptBox || !generatePresentationBtn || !copyPresentationBtn || !openNotebookStudioBtn) {
+    return;
+  }
+
+  const notebooks = notebookState.notebooks || [];
+  const selectedNotebook = notebookState.selectedNotebook || null;
+
+  setStatusPill(workspaceChip, `${notebooks.length} workspace${notebooks.length === 1 ? "" : "s"}`, notebooks.length ? "active" : "neutral");
+
+  notebookSelect.innerHTML = "";
+  notebooks.forEach((notebook) => {
+    const option = document.createElement("option");
+    option.value = notebook.id;
+    option.textContent = notebook.title;
+    option.selected = notebook.id === notebookState.selectedNotebookId;
+    notebookSelect.appendChild(option);
+  });
+
+  if (!selectedNotebook) {
+    workspaceTitle.textContent = "No workspace selected";
+    workspaceMeta.textContent = `Create a workspace to start organizing sources. Optional external app: ${currentAiSettings.notebookTarget}.`;
+    setStatusPill(notebookSourceChip, "0 sources", "neutral");
+    notebookSourcesEmptyState.style.display = "block";
+    notebookSourcesList.innerHTML = "";
+    addToNotebookBtn.disabled = true;
+    addAllToNotebookBtn.disabled = true;
+    copyNotebookUrlsBtn.disabled = true;
+    copyNotebookMarkdownBtn.disabled = true;
+    renameNotebookBtn.disabled = true;
+    deleteNotebookBtn.disabled = true;
+    setStatusPill(notebookSummaryChip, "Pending", "neutral");
+    notebookSummaryMeta.textContent = "No workspace summary yet.";
+    notebookSummaryBox.textContent = "No workspace summary yet.";
+    setStatusPill(notebookAskAiChip, "Ready", "neutral");
+    notebookAskAiMeta.textContent = "Ask across all sources in the current workspace.";
+    notebookAskAiInput.value = "";
+    notebookAskAiResponse.textContent = "No workspace response yet.";
+    renderSourceChips(notebookAskAiSources, []);
+    setStatusPill(presentationChip, "Draft", "neutral");
+    presentationMeta.textContent = "Generate a slide deck prompt from this workspace.";
+    presentationPromptBox.textContent = "No presentation prompt yet.";
+    generatePresentationBtn.disabled = true;
+    copyPresentationBtn.disabled = true;
+    openNotebookStudioBtn.disabled = true;
+    return;
+  }
+
+  const notebookSources = getNotebookSourceItems(queue, selectedNotebook);
+  workspaceTitle.textContent = selectedNotebook.title;
+  const currentSource = notebookSources.find((item) => item.id === selectedVideoId) || null;
+  workspaceMeta.textContent = `${notebookSources.length} source${notebookSources.length === 1 ? "" : "s"} in this workspace. Created ${new Date(selectedNotebook.createdAt).toLocaleDateString()}. Optional external app: ${currentAiSettings.notebookTarget}.${currentSource ? ` Current source: ${currentSource.title}` : " Select or add a source to continue."}`;
+  setStatusPill(notebookSourceChip, `${notebookSources.length} source${notebookSources.length === 1 ? "" : "s"}`, notebookSources.length ? "success" : "neutral");
+  renameNotebookBtn.disabled = false;
+  deleteNotebookBtn.disabled = false;
+
+  const currentSourceInNotebook = selectedVideoId && selectedNotebook.sourceVideoIds.includes(selectedVideoId);
+  addToNotebookBtn.textContent = currentSourceInNotebook ? "Already in Notebook" : "Add Selected Video";
+  addToNotebookBtn.disabled = !selectedVideoId || currentSourceInNotebook;
+  addAllToNotebookBtn.disabled = !queue.length;
+  copyNotebookUrlsBtn.disabled = !notebookSources.length;
+  copyNotebookMarkdownBtn.disabled = !notebookSources.length;
+
+  const summaryChipState = getNotebookSummaryChipState(selectedNotebook);
+  setStatusPill(notebookSummaryChip, summaryChipState.label, summaryChipState.tone);
+  if (notebookSummaryInFlightForNotebookId === selectedNotebook.id && !selectedNotebook.summary) {
+    notebookSummaryMeta.textContent = "Workspace summary is generating...";
+    notebookSummaryBox.textContent = "Generating workspace summary...";
+  } else {
+    notebookSummaryMeta.textContent = selectedNotebook.summary
+      ? `Workspace summary updated ${new Date(selectedNotebook.summaryUpdatedAt || selectedNotebook.updatedAt).toLocaleString()}.`
+      : "No workspace summary yet.";
+    notebookSummaryBox.textContent = selectedNotebook.summary || "No workspace summary yet.";
+  }
+
+  const notebookAskAiChipState = getNotebookAskAiChipState(selectedNotebook);
+  setStatusPill(notebookAskAiChip, notebookAskAiChipState.label, notebookAskAiChipState.tone);
+  const notebookTurns = Math.floor((Array.isArray(selectedNotebook.chatHistory) ? selectedNotebook.chatHistory.length : 0) / 2);
+  notebookAskAiMeta.textContent = `Using ${currentAiSettings.provider} / ${currentAiSettings.model}. ${notebookTurns ? `${notebookTurns} prior workspace turn${notebookTurns === 1 ? "" : "s"}.` : "Ask across all sources in the current workspace."}`;
+  notebookAskAiInput.value = selectedNotebook.lastQuestion || "";
+  notebookAskAiResponse.textContent = selectedNotebook.lastAiResponse || "No workspace response yet.";
+  renderSourceChips(notebookAskAiSources, Array.isArray(selectedNotebook.lastAiSources) ? selectedNotebook.lastAiSources : []);
+  const presentationState = getNotebookPresentationChipState(selectedNotebook);
+  setStatusPill(presentationChip, presentationState.label, presentationState.tone);
+  if (notebookPresentationInFlightForNotebookId === selectedNotebook.id && !selectedNotebook.presentationPrompt) {
+    presentationMeta.textContent = "Generating a workspace slide deck prompt...";
+    presentationPromptBox.textContent = "Generating presentation prompt...";
+  } else {
+    presentationMeta.textContent = selectedNotebook.presentationPrompt
+      ? `Presentation prompt updated ${new Date(selectedNotebook.presentationPromptUpdatedAt || selectedNotebook.updatedAt).toLocaleString()}. Source: ${selectedNotebook.presentationSource || "unknown"}. Paste this into any external slide workflow if needed.`
+      : "Generate a slide deck prompt from this workspace.";
+    presentationPromptBox.textContent = selectedNotebook.presentationPrompt || "No presentation prompt yet.";
+  }
+  generatePresentationBtn.disabled = !notebookSources.length;
+  copyPresentationBtn.disabled = !selectedNotebook.presentationPrompt;
+  openNotebookStudioBtn.disabled = !notebookSources.length;
+
+  notebookSourcesList.innerHTML = "";
+  if (!notebookSources.length) {
+    notebookSourcesEmptyState.style.display = "block";
+  } else {
+    notebookSourcesEmptyState.style.display = "none";
+    notebookSources.forEach((item) => {
+      notebookSourcesList.appendChild(createNotebookSourceItem(item, item.id === selectedVideoId));
+    });
+  }
+}
+
 function renderDetails(item) {
   const detailsEmptyState = document.getElementById("detailsEmptyState");
   const detailsPanel = document.getElementById("detailsPanel");
@@ -698,14 +1645,16 @@ function renderDetails(item) {
   const descriptionMeta = document.getElementById("descriptionMeta");
   const summaryBox = document.getElementById("summaryBox");
   const summaryMeta = document.getElementById("summaryMeta");
-  const notebookExportStatus = document.getElementById("notebookExportStatus");
+  const transcriptBox = document.getElementById("transcriptBox");
+  const transcriptMeta = document.getElementById("transcriptMeta");
+  const transcriptChip = document.getElementById("transcriptChip");
+  const manualTranscriptInput = document.getElementById("manualTranscriptInput");
   const askAiResponse = document.getElementById("askAiResponse");
   const askAiInput = document.getElementById("askAiInput");
   const askAiSources = document.getElementById("askAiSources");
   const selectedVideoChip = document.getElementById("selectedVideoChip");
   const descriptionChip = document.getElementById("descriptionChip");
   const summaryStateChip = document.getElementById("summaryStateChip");
-  const notebookStateChip = document.getElementById("notebookStateChip");
   const askAiStateChip = document.getElementById("askAiStateChip");
 
   if (!item) {
@@ -729,6 +1678,11 @@ function renderDetails(item) {
     ? "Description source: YouTube page metadata"
     : "No description captured yet.";
   setStatusPill(descriptionChip, cleanedDescription ? "Metadata" : "Missing", cleanedDescription ? "neutral" : "warn");
+  transcriptBox.textContent = buildTranscriptPreview(item);
+  transcriptMeta.textContent = buildTranscriptMeta(item);
+  manualTranscriptInput.value = item.manualTranscript ? cleanTranscript(item.transcript || "") : "";
+  const transcriptState = getTranscriptChipState(item);
+  setStatusPill(transcriptChip, transcriptState.label, transcriptState.tone);
   if (summaryInFlightForVideoId === item.id && !item.summary) {
     summaryBox.textContent = "Generating summary...";
     summaryMeta.textContent = "Summary source: generating...";
@@ -740,15 +1694,6 @@ function renderDetails(item) {
   }
   const summaryState = getSummaryChipState(item);
   setStatusPill(summaryStateChip, summaryState.label, summaryState.tone);
-  if (item.notebookLmImportedAt && item.notebookLmNotebookUrl) {
-    notebookExportStatus.textContent = `Imported into NotebookLM ${new Date(item.notebookLmImportedAt).toLocaleString()}.\nNotebook: ${item.notebookLmNotebookUrl}`;
-  } else {
-    notebookExportStatus.textContent = item.lastNotebookLmExportAt
-      ? `NotebookLM export prepared ${new Date(item.lastNotebookLmExportAt).toLocaleString()}.`
-      : "No export prepared yet.";
-  }
-  const notebookState = getNotebookChipState(item);
-  setStatusPill(notebookStateChip, notebookState.label, notebookState.tone);
   askAiResponse.textContent = item.lastAiResponse || "No response yet.";
   askAiInput.value = item.lastQuestion || "";
   const sourceLabels = Array.isArray(item.lastAiSources) ? item.lastAiSources : [];
@@ -769,6 +1714,7 @@ async function renderQueue() {
 
   try {
     const queue = await getQueue();
+    const notebookState = await getNotebookState();
     const queueList = document.getElementById("queueList");
     const emptyState = document.getElementById("emptyState");
     const queueCountChip = document.getElementById("queueCountChip");
@@ -777,18 +1723,22 @@ async function renderQueue() {
 
     queueList.innerHTML = "";
     setStatusPill(queueCountChip, `${queue.length} video${queue.length === 1 ? "" : "s"}`, queue.length ? "active" : "neutral");
+    renderNotebookWorkspace(queue, notebookState);
 
     if (!queue.length) {
       emptyState.style.display = "block";
-      selectedVideoId = null;
+      const notebookSources = getNotebookSourceItems(queue, notebookState.selectedNotebook);
+      selectedVideoId = notebookSources[0]?.id || null;
       renderDetails(null);
       return;
     }
 
     emptyState.style.display = "none";
 
+    const notebookSources = getNotebookSourceItems(queue, notebookState.selectedNotebook);
+
     if (!selectedVideoId || !queue.some((item) => item.id === selectedVideoId)) {
-      selectedVideoId = queue[0].id;
+      selectedVideoId = notebookSources[0]?.id || queue[0].id;
     }
 
     queue.forEach((item) => {
@@ -819,6 +1769,24 @@ async function renderQueue() {
         }
       });
     });
+
+    document.querySelectorAll(".open-source-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        selectedVideoId = btn.dataset.id;
+        renderQueue();
+      });
+    });
+
+    document.querySelectorAll(".remove-source-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        removeVideoFromNotebook(btn.dataset.id);
+      });
+    });
+
+    const selectedNotebook = notebookState.selectedNotebook || null;
+    if (selectedNotebook && notebookSources.length && !selectedNotebook.summary && notebookSummaryInFlightForNotebookId !== selectedNotebook.id) {
+      handleSummarizeNotebook({ silent: true });
+    }
 
     const selectedItem = queue.find((item) => item.id === selectedVideoId) || null;
     renderDetails(selectedItem);
@@ -904,6 +1872,45 @@ async function handleSummarize(options = {}) {
   }
 }
 
+async function handleSummarizeNotebook(options = {}) {
+  const notebookState = await getNotebookState();
+  const notebook = notebookState.selectedNotebook;
+  const queue = await getQueue();
+  const sourceItems = getNotebookSourceItems(queue, notebook);
+
+  if (!notebook || !sourceItems.length) {
+    if (!options.silent) {
+      alert("Add at least one source to the notebook first.");
+    }
+    return;
+  }
+
+  notebookSummaryInFlightForNotebookId = notebook.id;
+  renderQueue();
+
+  try {
+    const prompt = buildNotebookSummaryPrompt(notebook, sourceItems);
+    const aiResult = await requestAiText(prompt);
+
+    if (!aiResult.success || !String(aiResult.text || "").trim()) {
+      if (!options.silent) {
+        alert(`Notebook summary failed.\n\n${aiResult.error || "No summary returned."}`);
+      }
+      return;
+    }
+
+    await updateNotebook(notebook.id, (currentNotebook) => ({
+      ...currentNotebook,
+      summary: String(aiResult.text).trim(),
+      summaryUpdatedAt: new Date().toISOString(),
+      summarySource: "notebook+ai"
+    }));
+  } finally {
+    notebookSummaryInFlightForNotebookId = null;
+    renderQueue();
+  }
+}
+
 async function handleAskAi() {
   const queue = await getQueue();
   const item = queue.find((video) => video.id === selectedVideoId);
@@ -959,6 +1966,55 @@ async function handleAskAi() {
     }
   } finally {
     askAiInFlightForVideoId = null;
+    renderQueue();
+  }
+}
+
+async function handleAskNotebookAi() {
+  const notebookState = await getNotebookState();
+  const notebook = notebookState.selectedNotebook;
+  const queue = await getQueue();
+  const sourceItems = getNotebookSourceItems(queue, notebook);
+
+  if (!notebook || !sourceItems.length) {
+    alert("Add workspace sources first.");
+    return;
+  }
+
+  const input = document.getElementById("notebookAskAiInput");
+  const question = input.value.trim();
+  if (!question) {
+    alert("Please enter a notebook question.");
+    return;
+  }
+
+  notebookAskAiInFlightForNotebookId = notebook.id;
+  const responseBox = document.getElementById("notebookAskAiResponse");
+  responseBox.textContent = "Thinking...";
+  renderQueue();
+
+  try {
+    const prompt = buildNotebookAskAiPrompt(notebook, sourceItems, question);
+    const aiResult = await requestAiText(prompt);
+
+    if (!aiResult.success) {
+      responseBox.textContent = "No workspace response yet.";
+      alert(`Notebook AI request failed.\n\n${aiResult.error || "Unknown error."}`);
+      return;
+    }
+
+    const answerText = aiResult.text || "No workspace response returned.";
+    const sourceLabels = getNotebookSourceLabels(sourceItems);
+
+    await updateNotebook(notebook.id, (currentNotebook) => ({
+      ...currentNotebook,
+      lastQuestion: question,
+      lastAiResponse: answerText,
+      lastAiSources: sourceLabels,
+      chatHistory: appendNotebookChatHistory(currentNotebook, question, answerText, sourceLabels)
+    }));
+  } finally {
+    notebookAskAiInFlightForNotebookId = null;
     renderQueue();
   }
 }
@@ -1020,6 +2076,30 @@ function bindActions() {
   document.getElementById("refreshBtn").addEventListener("click", handleRefresh);
 
   document.getElementById("clearBtn").addEventListener("click", clearQueue);
+  document.getElementById("createNotebookBtn").addEventListener("click", createNotebookFromPrompt);
+  document.getElementById("renameNotebookBtn").addEventListener("click", renameSelectedNotebook);
+  document.getElementById("deleteNotebookBtn").addEventListener("click", deleteSelectedNotebook);
+  document.getElementById("addToNotebookBtn").addEventListener("click", addSelectedVideoToNotebook);
+  document.getElementById("addAllToNotebookBtn").addEventListener("click", addAllQueueVideosToNotebook);
+  document.getElementById("copyNotebookUrlsBtn").addEventListener("click", copyNotebookSourceUrls);
+  document.getElementById("copyNotebookMarkdownBtn").addEventListener("click", handleCopyOpenNotebookMarkdown);
+  document.getElementById("generatePresentationBtn").addEventListener("click", handleGeneratePresentationPrompt);
+  document.getElementById("copyPresentationBtn").addEventListener("click", handleCopyPresentationPrompt);
+  document.getElementById("openNotebookStudioBtn").addEventListener("click", handleOpenNotebookStudio);
+  document.getElementById("notebookSelect").addEventListener("change", async (event) => {
+    const nextNotebookId = event.target.value;
+    const state = await getNotebookState();
+    await setNotebookState(state.notebooks, nextNotebookId);
+    const nextNotebook = state.notebooks.find((notebook) => notebook.id === nextNotebookId);
+    if (nextNotebook?.sourceVideoIds?.length) {
+      if (!nextNotebook.sourceVideoIds.includes(selectedVideoId)) {
+        selectedVideoId = nextNotebook.sourceVideoIds[0];
+      }
+    } else {
+      selectedVideoId = null;
+    }
+    renderQueue();
+  });
 
   document.getElementById("copyBtn").addEventListener("click", async () => {
     const queue = await getQueue();
@@ -1048,13 +2128,17 @@ function bindActions() {
   });
 
   document.getElementById("summarizeBtn").addEventListener("click", handleSummarize);
-  document.getElementById("sendToNotebookBtn").addEventListener("click", handleSendToNotebookLm);
+  document.getElementById("refetchTranscriptBtn").addEventListener("click", handleRefetchTranscript);
+  document.getElementById("saveTranscriptBtn").addEventListener("click", handleSaveManualTranscript);
+  document.getElementById("clearTranscriptBtn").addEventListener("click", handleClearTranscript);
+  document.getElementById("summarizeNotebookBtn").addEventListener("click", handleSummarizeNotebook);
   document.getElementById("askAiBtn").addEventListener("click", handleAskAi);
+  document.getElementById("notebookAskAiBtn").addEventListener("click", handleAskNotebookAi);
 }
 
 function bindRealtimeListeners() {
   chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName === "local" && changes.queue) {
+    if (areaName === "local" && (changes.queue || changes[NOTEBOOKS_KEY] || changes[SELECTED_NOTEBOOK_KEY])) {
       renderQueue();
     }
   });
@@ -1080,7 +2164,7 @@ function bindRealtimeListeners() {
 document.addEventListener("DOMContentLoaded", () => {
   const subtitle = document.querySelector(".subtitle");
   if (subtitle) {
-    subtitle.textContent = "YouTube -> NotebookLM workflow";
+    subtitle.textContent = "YouTube -> research workspace";
   }
 
   bindActions();
@@ -1089,7 +2173,9 @@ document.addEventListener("DOMContentLoaded", () => {
     if (response) {
       currentAiSettings = {
         provider: response.provider || "ollama",
-        model: response.model || "qwen3:8b"
+        model: response.model || "qwen3:8b",
+        notebookTarget: response.notebookTarget || "open-notebook",
+        openNotebookUrl: response.openNotebookUrl || "http://localhost:8502"
       };
     }
     refreshAiHint();

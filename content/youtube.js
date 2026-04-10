@@ -1,6 +1,8 @@
 (function () {
   const BUTTON_ID = "aristai-add-button";
   const BUTTON_CONTAINER_ID = "aristai-button-container";
+  const NOTEBOOKS_KEY = "notebooks";
+  const SELECTED_NOTEBOOK_KEY = "selectedNotebookId";
 
   let observer = null;
   let navigationTimer = null;
@@ -590,6 +592,53 @@
     });
   }
 
+  function createNotebook(title = "Research Workspace") {
+    return {
+      id: `notebook-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      title,
+      sourceVideoIds: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  async function ensureVideoInSelectedNotebook(videoId) {
+    if (!videoId || !isRuntimeAvailable()) {
+      return;
+    }
+
+    const result = await chrome.storage.local.get([NOTEBOOKS_KEY, SELECTED_NOTEBOOK_KEY]);
+    let notebooks = Array.isArray(result[NOTEBOOKS_KEY]) ? result[NOTEBOOKS_KEY] : [];
+    let selectedNotebookId = result[SELECTED_NOTEBOOK_KEY] || null;
+
+    if (!notebooks.length) {
+      const defaultNotebook = createNotebook("My First Workspace");
+      notebooks = [defaultNotebook];
+      selectedNotebookId = defaultNotebook.id;
+    }
+
+    if (!selectedNotebookId || !notebooks.some((notebook) => notebook.id === selectedNotebookId)) {
+      selectedNotebookId = notebooks[0].id;
+    }
+
+    const nextNotebooks = notebooks.map((notebook) => {
+      if (notebook.id !== selectedNotebookId) {
+        return notebook;
+      }
+
+      return {
+        ...notebook,
+        sourceVideoIds: Array.from(new Set([...(Array.isArray(notebook.sourceVideoIds) ? notebook.sourceVideoIds : []), videoId])),
+        updatedAt: new Date().toISOString()
+      };
+    });
+
+    await chrome.storage.local.set({
+      [NOTEBOOKS_KEY]: nextNotebooks,
+      [SELECTED_NOTEBOOK_KEY]: selectedNotebookId
+    });
+  }
+
   async function updateStoredVideo(videoId, updater) {
     const result = await getQueueFromStorage();
     const queue = result.queue || [];
@@ -697,6 +746,7 @@
         ...transcriptData
       });
       await setQueueToStorage(queue);
+      await ensureVideoInSelectedNotebook(video.id);
     } else if (!existingItem.transcript) {
       const nextQueue = queue.map((item) => {
         if (item.id !== video.id) {
@@ -710,6 +760,9 @@
         };
       });
       await setQueueToStorage(nextQueue);
+      await ensureVideoInSelectedNotebook(video.id);
+    } else {
+      await ensureVideoInSelectedNotebook(video.id);
     }
 
     await focusCurrentVideoInSidebar(video.id);
@@ -766,12 +819,38 @@
   }
 
   function findInjectionTarget() {
-    return (
-      document.querySelector("#top-level-buttons-computed") ||
-      document.querySelector("#menu #top-level-buttons-computed") ||
-      document.querySelector("ytd-watch-metadata #actions-inner") ||
-      null
-    );
+    const selectors = [
+      "ytd-watch-metadata #top-level-buttons-computed",
+      "ytd-watch-metadata #menu #top-level-buttons-computed",
+      "ytd-watch-metadata #actions-inner #top-level-buttons-computed",
+      "ytd-watch-metadata #actions #top-level-buttons-computed",
+      "ytd-watch-metadata #actions-inner",
+      "ytd-watch-metadata #actions",
+      "ytd-watch-metadata #menu",
+      "ytd-watch-metadata ytd-menu-renderer",
+      "#above-the-fold #top-level-buttons-computed",
+      "#above-the-fold #actions-inner",
+      "#above-the-fold #menu"
+    ];
+
+    for (const selector of selectors) {
+      const candidate = document.querySelector(selector);
+      if (!candidate) {
+        continue;
+      }
+
+      const rect = candidate.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        return candidate;
+      }
+    }
+
+    const shareButton = findClickableByPatterns([/^share$/i, /share/i]);
+    if (shareButton?.parentElement) {
+      return shareButton.parentElement;
+    }
+
+    return null;
   }
 
   function injectButton() {
@@ -792,9 +871,15 @@
       container.id = BUTTON_CONTAINER_ID;
       container.style.display = "inline-flex";
       container.style.alignItems = "center";
+      container.style.flexShrink = "0";
+      container.style.marginRight = "8px";
       target.prepend(container);
     } else if (container.parentElement !== target) {
       target.prepend(container);
+    }
+
+    if (getComputedStyle(target).display.includes("flex")) {
+      container.style.order = "-1";
     }
 
     if (!button) {

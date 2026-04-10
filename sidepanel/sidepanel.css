@@ -25,6 +25,19 @@ body {
   padding: 18px;
 }
 
+.main-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.95fr) minmax(420px, 1.25fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.content-column {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
 .hero {
   display: flex;
   align-items: flex-start;
@@ -154,6 +167,93 @@ h2 {
 .details-panel {
   display: grid;
   gap: 14px;
+}
+
+.workspace-section {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  position: sticky;
+  top: 18px;
+}
+
+.workspace-card {
+  display: grid;
+  gap: 12px;
+}
+
+.toolbar-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.toolbar-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.toolbar-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.select-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(33, 26, 18, 0.16);
+  background: var(--panel-strong);
+  color: var(--ink);
+  font: inherit;
+  box-sizing: border-box;
+}
+
+.source-list {
+  display: grid;
+  gap: 10px;
+}
+
+.source-item {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  border-radius: 16px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.source-item.active {
+  border-color: rgba(182, 84, 42, 0.42);
+  background: linear-gradient(180deg, #fff9f1 0%, #f7ede1 100%);
+}
+
+.source-item-title {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.source-item-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.source-item-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.secondary-btn {
+  background: #ece6de;
+  color: var(--ink);
 }
 
 .details-thumbnail {
@@ -329,6 +429,16 @@ h2 {
   margin-top: 10px;
 }
 
+.inline-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.inline-actions > * {
+  flex: 1 1 160px;
+}
+
 .source-chips {
   display: flex;
   flex-wrap: wrap;
@@ -449,6 +559,17 @@ h2 {
   }
 }
 
+@media (max-width: 1100px) {
+  .main-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-section {
+    position: static;
+  }
+
+}
+
 @media (max-width: 520px) {
   .actions {
     grid-template-columns: 1fr;
@@ -460,6 +581,14 @@ h2 {
 
   .queue-item {
     flex-direction: column;
+  }
+
+  .toolbar-row {
+    grid-template-columns: 1fr;
+  }
+
+  .toolbar-actions {
+    justify-content: flex-start;
   }
 
   .queue-thumb {

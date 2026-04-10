@@ -14,7 +14,7 @@
           <h1>AristAI</h1>
           <img src="../icons/icon128.png" alt="AristAI icon" class="hero-icon" />
         </div>
-      <p class="subtitle">YouTube → NotebookLM workflow</p>
+      <p class="subtitle">YouTube -> research workspace</p>
       </div>
       <button id="refreshBtn" class="icon-button" type="button" aria-label="Refresh queue" title="Refresh">&#8635;</button>
     </header>
@@ -25,7 +25,86 @@
       <button id="clearBtn" class="danger">Clear Queue</button>
     </section>
 
-    <section class="details-section">
+    <div class="main-grid">
+      <section class="workspace-section">
+        <div class="section-heading">
+          <h2>Research Workspace</h2>
+          <div id="workspaceChip" class="status-pill active">1 workspace</div>
+        </div>
+
+        <div class="detail-card workspace-card">
+          <div class="toolbar-row">
+            <label class="toolbar-field">
+              <span class="meta-label">Current Collection</span>
+              <select id="notebookSelect" class="select-input"></select>
+            </label>
+            <div class="toolbar-actions">
+              <button id="createNotebookBtn" type="button">Create</button>
+              <button id="renameNotebookBtn" class="secondary-btn" type="button">Rename</button>
+              <button id="deleteNotebookBtn" class="secondary-btn" type="button">Delete</button>
+            </div>
+          </div>
+
+          <div class="section-header">
+            <strong id="workspaceTitle">My First Workspace</strong>
+          </div>
+          <div id="workspaceMeta" class="section-meta">No workspace selected.</div>
+          <div class="inline-actions">
+            <button id="addToNotebookBtn" type="button">Add Selected Video</button>
+            <button id="addAllToNotebookBtn" type="button">Add All Queue Videos</button>
+            <button id="copyNotebookUrlsBtn" class="secondary-btn" type="button">Copy Source URLs</button>
+            <button id="copyNotebookMarkdownBtn" class="secondary-btn" type="button">Copy Workspace Markdown</button>
+          </div>
+        </div>
+
+        <div class="section-heading">
+          <h2>Collected Sources</h2>
+          <div id="notebookSourceChip" class="status-pill neutral">0 sources</div>
+        </div>
+        <div id="notebookSourcesEmptyState" class="empty">This workspace has no sources yet.</div>
+        <div id="notebookSourcesList" class="source-list"></div>
+
+        <div class="detail-card workspace-card">
+          <div class="section-header">
+            <strong>Workspace Summary</strong>
+            <div class="section-header-actions">
+              <div id="notebookSummaryChip" class="status-pill neutral">Pending</div>
+              <button id="summarizeNotebookBtn" type="button">Summarize Workspace</button>
+            </div>
+          </div>
+          <div id="notebookSummaryMeta" class="section-meta">No workspace summary yet.</div>
+          <div id="notebookSummaryBox" class="content-box">No workspace summary yet.</div>
+        </div>
+
+        <div class="detail-card workspace-card">
+          <div class="section-header">
+            <strong>Workspace Ask AI</strong>
+            <div id="notebookAskAiChip" class="status-pill neutral">Ready</div>
+          </div>
+          <div id="notebookAskAiMeta" class="section-meta">Ask across all sources in the current workspace.</div>
+          <textarea id="notebookAskAiInput" class="input-box" placeholder="Ask something about this workspace..." rows="3"></textarea>
+          <button id="notebookAskAiBtn" class="action-spaced" type="button">Ask Workspace AI</button>
+          <div id="notebookAskAiResponse" class="content-box compact-box chat-response">No workspace response yet.</div>
+          <div id="notebookAskAiSources" class="source-chips section-meta">Sources used: none yet.</div>
+        </div>
+
+        <div class="detail-card workspace-card">
+          <div class="section-header">
+            <strong>Presentation</strong>
+            <div id="presentationChip" class="status-pill neutral">Draft</div>
+          </div>
+          <div id="presentationMeta" class="section-meta">Generate a slide deck prompt from this workspace.</div>
+          <div class="inline-actions action-spaced">
+            <button id="generatePresentationBtn" type="button">Generate Deck Prompt</button>
+            <button id="copyPresentationBtn" class="secondary-btn" type="button">Copy Prompt</button>
+            <button id="openNotebookStudioBtn" class="secondary-btn" type="button">Open Optional External App</button>
+          </div>
+          <div id="presentationPromptBox" class="content-box">No presentation prompt yet.</div>
+        </div>
+      </section>
+
+      <div class="content-column">
+        <section class="details-section">
       <div class="section-heading">
         <h2>Selected Video</h2>
         <div id="selectedVideoChip" class="status-pill neutral">Waiting</div>
@@ -63,6 +142,23 @@
 
         <div class="detail-card">
           <div class="section-header">
+            <strong>Transcript</strong>
+            <div class="section-header-actions">
+              <div id="transcriptChip" class="status-pill neutral">Missing</div>
+              <button id="refetchTranscriptBtn" class="secondary-btn" type="button">Retry Fetch</button>
+            </div>
+          </div>
+          <div id="transcriptMeta" class="section-meta">No transcript captured yet.</div>
+          <div id="transcriptBox" class="content-box compact-box">No transcript yet.</div>
+          <textarea id="manualTranscriptInput" class="input-box" placeholder="Paste a transcript here if YouTube transcript extraction fails..." rows="5"></textarea>
+          <div class="inline-actions action-spaced">
+            <button id="saveTranscriptBtn" type="button">Save Transcript</button>
+            <button id="clearTranscriptBtn" class="secondary-btn" type="button">Clear Transcript</button>
+          </div>
+        </div>
+
+        <div class="detail-card">
+          <div class="section-header">
             <strong>Summary</strong>
             <div class="section-header-actions">
               <div id="summaryStateChip" class="status-pill neutral">Pending</div>
@@ -71,18 +167,6 @@
           </div>
           <div id="summaryMeta" class="section-meta">No summary generated yet.</div>
           <div id="summaryBox" class="content-box">No summary yet.</div>
-        </div>
-
-        <div class="detail-card">
-          <div class="section-header">
-            <strong>NotebookLM Export</strong>
-            <div class="section-header-actions">
-              <div id="notebookStateChip" class="status-pill neutral">Draft</div>
-              <button id="sendToNotebookBtn" type="button">Send to NotebookLM</button>
-            </div>
-          </div>
-          <div class="section-meta">If no summary exists yet, AristAI will generate one automatically before export.</div>
-          <div id="notebookExportStatus" class="content-box compact-box">No export prepared yet.</div>
         </div>
 
         <div class="detail-card ask-ai-card">
@@ -97,16 +181,18 @@
           <div id="askAiSources" class="source-chips section-meta">Sources used: none yet.</div>
         </div>
       </div>
-    </section>
+        </section>
 
-    <section id="queueSection">
-      <div class="section-heading">
-        <h2>Queue</h2>
-        <div id="queueCountChip" class="status-pill neutral">0 videos</div>
+        <section id="queueSection">
+          <div class="section-heading">
+            <h2>Source Library</h2>
+            <div id="queueCountChip" class="status-pill neutral">0 videos</div>
+          </div>
+          <div id="emptyState" class="empty">No videos added yet.</div>
+          <div id="queueList" class="queue-list"></div>
+        </section>
       </div>
-      <div id="emptyState" class="empty">No videos added yet.</div>
-      <div id="queueList" class="queue-list"></div>
-    </section>
+    </div>
   </div>
 
   <script src="sidepanel.js"></script>

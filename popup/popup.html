@@ -116,6 +116,13 @@
     <input id="baseUrlInput" type="text" value="http://127.0.0.1:11434" />
     <label for="modelInput">Model</label>
     <input id="modelInput" type="text" value="qwen3:8b" />
+    <label for="apiKeyInput">API Key</label>
+    <input id="apiKeyInput" type="password" value="" placeholder="Only needed for OpenAI" />
+    <label for="notebookTargetInput">Optional External App</label>
+    <input id="notebookTargetInput" type="text" value="open-notebook" placeholder="open-notebook or google-notebooklm" />
+    <label for="openNotebookUrlInput">Optional App URL</label>
+    <input id="openNotebookUrlInput" type="text" value="http://localhost:8502" />
+    <button id="openExternalAppBtn">Open External App</button>
     <button id="openSidebarBtn">Open Sidebar</button>
     <button id="saveSettingsBtn">Save AI Settings</button>
     <div id="settingsStatus" class="status">Provider: ollama
