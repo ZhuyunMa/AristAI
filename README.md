@@ -1,126 +1,101 @@
 # AristAI
 
-AristAI is a Chrome extension that merges two workflows into one product experience:
+AristAI is a Chrome extension for turning YouTube videos into an organized research workflow. It combines source collection, AI-assisted understanding, workspace management, and export support inside one side panel.
 
-- `YouTube -> NotebookLM`
-- `AI-powered sidebar for video understanding`
+## What It Does
 
-The extension lets a user collect a YouTube video, review it inside a side panel, ask follow-up questions with a local LLM, and send the result into a NotebookLM workflow from the same workspace.
-
-## Project Status
-
-This project currently delivers a working `MVP / demo version`.
-
-It is not a production-ready release, but the core workflow is implemented and can be demonstrated end-to-end:
+AristAI currently supports this workflow:
 
 1. Open a YouTube video
-2. Add it to AristAI
-3. Generate a summary automatically in the sidebar
-4. Ask AI questions about the current video with conversational memory
-5. Export and auto-import a NotebookLM-ready source
-6. Open NotebookLM with the prepared draft and import status visible in-page
+2. Add it to AristAI from the YouTube page
+3. Review metadata, transcript, and summary in the side panel
+4. Ask AI questions about a single video
+5. Group videos into research workspaces
+6. Ask AI questions across all sources in a workspace
+7. Generate a presentation prompt from the workspace
+8. Export content toward NotebookLM or an optional external app
 
-In practical terms, the project is complete enough for a class demo or submission, while still leaving transcript stability and more formal backend transcription as future work.
+## Current Feature Set
 
-## Implemented Features
+### YouTube Collection
 
-- Detect the current YouTube video from a watch page
-- Inject an `Add to AristAI` button into YouTube
-- Re-open the AristAI side panel even for videos that are already added
-- Save selected videos into a local queue with metadata
-- Manage the queue inside a Chrome side panel
-- Display selected video details including title, channel, URL, description, and summary
-- Attempt transcript retrieval from YouTube page data, text tracks, and transcript-panel fallbacks
-- Generate a summary from transcript when transcript extraction succeeds
-- Fall back to metadata + local AI summary generation when transcript extraction is unavailable or incomplete
-- Ask questions about the selected video using a local Ollama model
-- Keep per-video multi-turn chat history in the AI sidebar
-- Show which sources were used for each AI answer
-- Prepare a NotebookLM-ready export draft
-- Open NotebookLM, surface the draft in a floating AristAI panel, and attempt automatic source import
-- Store a best-effort `video -> notebook` relationship after NotebookLM import succeeds
+- Detects the current YouTube video on watch pages
+- Injects an `Add to AristAI` button into YouTube
+- Stores video metadata in `chrome.storage.local`
+- Keeps a local source library / queue of collected videos
+- Lets the user reopen and continue working with previously collected videos
 
-## Current AI Setup
+### Source Review
 
-The current demo version is configured for `local Ollama inference`.
+- Displays title, channel, URL, thumbnail, description, transcript, and summary
+- Attempts transcript retrieval from available YouTube page data and fallbacks
+- Allows manual transcript paste-in when automatic extraction fails
+- Generates a summary for the selected video
 
-Default local settings:
+### AI Workspace
+
+- Supports per-video `Ask AI`
+- Supports multi-source workspace organization
+- Lets the user create, rename, and delete workspaces
+- Allows adding one selected video or the full queue into a workspace
+- Supports workspace-level summarization
+- Supports workspace-level `Ask AI` grounded in the workspace sources
+- Shows basic source labels used in AI responses
+
+### Export and Presentation Support
+
+- Copies workspace source URLs
+- Copies workspace markdown for downstream tools
+- Generates a deck / presentation prompt from workspace materials
+- Opens an optional external app target from extension settings
+- Keeps support for the NotebookLM-oriented workflow already present in the extension
+
+## UI Areas
+
+### Side Panel
+
+The side panel is the main working surface. It includes:
+
+- `Research Workspace`
+- `Collected Sources`
+- `Workspace Summary`
+- `Workspace Ask AI`
+- `Presentation`
+- `Selected Video`
+- `Source Library`
+
+### Popup
+
+The popup is used for runtime settings:
+
+- AI provider
+- Base URL
+- Model
+- API key
+- Optional external app target
+- Optional external app URL
+
+## AI Configuration
+
+The current default setup is local inference with Ollama.
+
+Default values:
 
 - Provider: `ollama`
 - Base URL: `http://127.0.0.1:11434`
 - Model: `qwen3:8b`
 
-The popup keeps the provider, base URL, and model configurable so the project can later be switched back to OpenAI or another provider.
-
-## Architecture Overview
-
-### YouTube Content Script
-
-The YouTube content script:
-
-- detects video metadata
-- injects the action button
-- stores video data in `chrome.storage.local`
-- attempts transcript retrieval when possible, with multiple fallbacks
-
-### Side Panel
-
-The side panel is the main AristAI workspace. It supports:
-
-- queue browsing
-- video selection
-- selected video metadata review
-- summary generation
-- AI Q&A with short conversation memory
-- NotebookLM export
-
-### Background Service Worker
-
-The background worker coordinates:
-
-- opening the side panel
-- opening NotebookLM
-- storing AI settings
-- routing AI requests to the configured provider
-
-### NotebookLM Bridge
-
-The NotebookLM content script reads the prepared export draft from local extension storage, displays it inside a floating panel on the NotebookLM page, and attempts a best-effort automatic text-source import into NotebookLM.
-
-## Demo Workflow
-
-### 1. Add a YouTube Video
-
-Open a YouTube video page and click `Add to AristAI`.
-
-### 2. Review in the Side Panel
-
-Use the side panel to:
-
-- inspect the selected video
-- review the description and summary
-- ask a question with the local AI model
-
-### 3. Export to NotebookLM
-
-Click `Send to NotebookLM` to:
-
-- build a NotebookLM-ready draft
-- copy it when possible
-- open NotebookLM
-- display the prepared draft inside the NotebookLM page
-- attempt to create a NotebookLM text source automatically through best-effort DOM automation
-- expose retry / status feedback inside the AristAI NotebookLM panel
+The popup also keeps the architecture configurable for other providers such as OpenAI.
 
 ## Local Setup
 
 ### Prerequisites
 
 - Google Chrome
-- Local Ollama installation
-- A local model installed in Ollama, for example `qwen3:8b`
+- Ollama running locally if you want local AI
+- A local Ollama model such as `qwen3:8b`
 
-### Chrome Extension Setup
+### Load the Extension
 
 1. Clone or download this repository
 2. Open `chrome://extensions`
@@ -130,23 +105,21 @@ Click `Send to NotebookLM` to:
 
 ### Ollama Setup
 
-Make sure Ollama is running locally and the model exists:
+Check your installed models:
 
 ```powershell
 ollama list
 ```
 
-If needed, pull the model:
+Pull the default model if needed:
 
 ```powershell
 ollama pull qwen3:8b
 ```
 
-### Important: Allow the Chrome Extension Origin
+### Allow the Chrome Extension Origin
 
-For local Ollama calls from the Chrome extension, the extension origin may need to be allowed.
-
-On Windows PowerShell:
+For local Ollama requests from a Chrome extension, you may need to allow Chrome extension origins:
 
 ```powershell
 [Environment]::SetEnvironmentVariable("OLLAMA_ORIGINS", "chrome-extension://*", "User")
@@ -154,60 +127,45 @@ On Windows PowerShell:
 
 Then fully restart Ollama.
 
-If this is not configured, the extension may fail with an Ollama `403` response even when Ollama is running correctly.
+If this is missing, local AI requests can fail with an Ollama `403`.
 
-## Popup Settings
+## Architecture Overview
 
-The extension popup currently exposes:
-
-- AI Provider
-- Base URL
-- Model
-
-Recommended demo settings:
-
-- Provider: `ollama`
-- Base URL: `http://127.0.0.1:11434`
-- Model: `qwen3:8b`
+- `manifest.json`: Chrome extension manifest
+- `background.js`: background service worker and settings / provider routing
+- `content/youtube.js`: YouTube integration and add-to-AristAI flow
+- `content/notebooklm.js`: NotebookLM page bridge
+- `sidepanel/sidepanel.html`: side panel markup
+- `sidepanel/sidepanel.css`: side panel styling
+- `sidepanel/sidepanel.js`: workspace, queue, summary, AI, and presentation logic
+- `popup/popup.html`: popup settings UI
+- `popup/popup.js`: popup settings behavior
+- `lib/storage.js`: local storage helpers and workspace data handling
 
 ## Known Limitations
 
-- Transcript retrieval from YouTube is not fully reliable, even when subtitles are visibly shown in the player
-- Visible subtitles in the YouTube player do not always expose a full transcript source that a Chrome extension can read programmatically
-- When transcript retrieval fails, the system falls back to metadata + local AI summary generation instead of full transcript-based understanding
-- NotebookLM integration uses DOM automation rather than an official API, so automatic import is best-effort and may break if NotebookLM changes its UI
-- Source citations in the AI sidebar are heuristic source labels, not NotebookLM-native citations
-- The current UI has been polished for demo use, but it is still not a full production interface
-- OpenAI provider support is not the primary demo path right now, although the architecture keeps the provider configurable
-- A more stable transcript pipeline would likely require backend ASR or local ASR instead of page-only extraction
+- YouTube transcript extraction is still best-effort and not fully reliable
+- Some videos expose incomplete or inaccessible transcript data to extensions
+- When transcript extraction fails, quality depends more heavily on metadata or pasted transcript text
+- NotebookLM integration is UI-driven rather than API-based, so it can break if NotebookLM changes
+- Source labels in AI responses are heuristic, not formal citations
+- The project is suitable for demo and iteration use, but it is still not a production release
 
-## Project Structure
+## Recommended Demo Path
 
-- `manifest.json` - Chrome extension manifest
-- `background.js` - background service worker
-- `content/youtube.js` - YouTube page integration
-- `content/notebooklm.js` - NotebookLM page bridge
-- `sidepanel/sidepanel.html` - side panel UI
-- `sidepanel/sidepanel.js` - side panel logic
-- `popup/popup.html` - popup UI
-- `popup/popup.js` - popup settings logic
-- `lib/` - helper modules
+1. Start Ollama locally
+2. Load the extension in Chrome
+3. Open a YouTube video and click `Add to AristAI`
+4. Open the side panel
+5. Review the video transcript / summary
+6. Add the video into a workspace
+7. Generate a workspace summary
+8. Ask a workspace-level question
+9. Generate the presentation prompt
+10. Export to your preferred downstream tool
 
-## Future Improvements
+## Repository
 
-- Add a backend or local ASR fallback for reliable transcript generation
-- Improve transcript reliability for more YouTube subtitle variants
-- Continue cleaning noisy YouTube description text before summary/export
-- Improve NotebookLM import reliability across NotebookLM UI changes
-- Re-enable and harden OpenAI provider support for a cloud-backed version
-- Add stronger provider abstraction for switching between Ollama and OpenAI cleanly
+GitHub remote:
 
-## Summary
-
-AristAI currently achieves the original project goal at the `MVP` level:
-
-- a merged `YouTube to NotebookLM` workflow
-- an `AI sidebar` experience
-- a single Chrome extension interface that connects both
-
-This version is intended for demonstration, iteration, and further refinement.
+- `https://github.com/ZhuyunMa/AristAI.git`
